@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "additionalDirectories": ["../consolidator", "../visualizer", "../adc"]
+  }
+}
