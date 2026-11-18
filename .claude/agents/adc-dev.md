@@ -2,7 +2,7 @@
 name: adc-dev
 description: Implementa tarefas no ADC (coletor de dados e importador Python em ../adc). Use para coleta Fundamentus, importador de planilhas, modelos, migrations e testes.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: haiku
+model: sonnet
 ---
 Você é o desenvolvedor do ADC. Trabalhe somente em `../adc`.
 

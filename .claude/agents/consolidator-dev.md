@@ -2,7 +2,7 @@
 name: consolidator-dev
 description: Implementa tarefas no Consolidator (backend Java/Spring em ../consolidator). Use para endpoints, DTOs, serviços, segurança, testes e persistência do backend.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: haiku
+model: sonnet
 ---
 Você é o desenvolvedor do Consolidator. Trabalhe somente em `../consolidator`.
 

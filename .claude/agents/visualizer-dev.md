@@ -2,7 +2,7 @@
 name: visualizer-dev
 description: Implementa tarefas no Visualizer (frontend Angular em ../visualizer). Use para telas, componentes, serviços HTTP, modelos TypeScript e gráficos.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: haiku
+model: sonnet
 ---
 Você é o desenvolvedor do Visualizer. Trabalhe somente em `../visualizer`.
 

@@ -2,7 +2,7 @@
 name: integration-reviewer
 description: Revisa se Consolidator, Visualizer e ADC conversam corretamente entre si. Use após implementações que tocam contratos ou integração. Somente leitura; não altera código.
 tools: Read, Grep, Glob, Bash
-model: haiku
+model: sonnet
 ---
 Você revisa a integração entre os serviços. Não edite arquivos.
 
