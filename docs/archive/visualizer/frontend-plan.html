@@ -1,0 +1,405 @@
+<!-- Histórico, arquivado em 2026-11-17.
+     Origem: visualizer/frontend-plan.html
+     Substituído por: visualizer/IMPLEMENTATION_PLAN.md (também arquivado); hoje, specs/ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visualizer — Angular Frontend Implementation Plan</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --orange: #d29922;
+      --red: #f85149;
+      --code-bg: #1c2128;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 2rem; margin-bottom: 0.25rem; color: #fff; }
+    .subtitle { color: var(--text-dim); margin-bottom: 2rem; font-size: 1rem; }
+    h2 {
+      font-size: 1.4rem;
+      margin: 2.5rem 0 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+      color: #fff;
+    }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.6rem; color: var(--accent); }
+    h4 { margin: 1rem 0 0.4rem; color: var(--text); }
+    p, li { color: var(--text); }
+    a { color: var(--accent); }
+    .phase-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .phase-card h3 { margin-top: 0; }
+    .phase-card ul { padding-left: 1.25rem; }
+    .phase-card li { margin-bottom: 0.35rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.75rem 0 1.25rem;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+    }
+    th { background: var(--surface); font-weight: 600; color: var(--text-dim); }
+    code, .code {
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.85em;
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      font-family: 'SF Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text);
+    }
+    .diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      font-family: 'SF Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text);
+    }
+    .status-done { color: var(--green); }
+    .status-missing { color: var(--red); }
+    .status-partial { color: var(--orange); }
+    .callout {
+      background: var(--code-bg);
+      border-left: 4px solid var(--accent);
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 6px 6px 0;
+      font-size: 0.9rem;
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+<h1>Visualizer — Angular Frontend Implementation Plan</h1>
+<p class="subtitle">
+  Investment wallet frontend for <strong>consolidator</strong> API<br>
+  Angular 18+ · TypeScript · Angular Material · Tailwind CSS · Signals
+</p>
+
+<!-- ====================================================================== -->
+<h2>1. Tech Stack & Tooling</h2>
+
+<table>
+  <thead>
+    <tr><th>Area</th><th>Choice</th><th>Rationale</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Framework</strong></td><td>Angular 18+ (standalone components)</td><td>Modern, built-in signals, zoneless optional</td></tr>
+    <tr><td><strong>Build</strong></td><td>Vite (via <code>@angular/cli</code> or Nx)</td><td>Fast HMR, smaller bundles</td></tr>
+    <tr><td><strong>Language</strong></td><td>TypeScript (strict mode)</td><td>Type safety with backend DTOs</td></tr>
+    <tr><td><strong>UI Library</strong></td><td>Angular Material + Tailwind CSS</td><td>Material for data tables/dialogs, Tailwind for layout</td></tr>
+    <tr><td><strong>State</strong></td><td>Signals + Services (no NgRx)</td><td>Simple, reactive, built-in</td></tr>
+    <tr><td><strong>Forms</strong></td><td>Reactive Forms</td><td>Complex validation, nested forms</td></tr>
+    <tr><td><strong>HTTP</strong></td><td><code>HttpClient</code> + interceptors</td><td>JWT, error handling, loading</td></tr>
+    <tr><td><strong>Routing</strong></td><td>Angular Router + Guards</td><td>Auth, lazy-loaded features</td></tr>
+    <tr><td><strong>Testing</strong></td><td>Jest + Testing Library</td><td>Fast, modern</td></tr>
+    <tr><td><strong>E2E</strong></td><td>Playwright</td><td>Reliable browser tests</td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>2. Project Structure</h2>
+
+<div class="diagram">visualizer/
+├── src/
+│   ├── app/
+│   │   ├── core/                    # Singleton services, guards, interceptors
+│   │   │   ├── auth/
+│   │   │   │   ├── auth.service.ts          # login, logout, token storage
+│   │   │   │   ├── auth.guard.ts            # canActivate for protected routes
+│   │   │   │   ├── auth.interceptor.ts      # JWT header injection
+│   │   │   │   └── token.storage.ts         # localStorage wrapper
+│   │   │   ├── http/
+│   │   │   │   ├── error.interceptor.ts     # global error handling
+│   │   │   │   └── loading.interceptor.ts   # global loading spinner
+│   │   │   └── core.module.ts
+│   │   │
+│   │   ├── shared/                  # Reusable UI, pipes, directives
+│   │   │   ├── components/
+│   │   │   │   ├── loading-spinner/
+│   │   │   │   ├── error-display/
+│   │   │   │   ├── confirm-dialog/
+│   │   │   │   └── page-header/
+│   │   │   ├── pipes/
+│   │   │   │   ├── currency.pipe.ts
+│   │   │   │   ├── percentage.pipe.ts
+│   │   │   │   └── profit-loss.pipe.ts
+│   │   │   └── validators/
+│   │   │       └── password-match.validator.ts
+│   │   │
+│   │   ├── features/                # Lazy-loaded feature modules
+│   │   │   ├── auth/
+│   │   │   │   ├── login/
+│   │   │   │   │   ├── login.component.ts
+│   │   │   │   │   ├── login.component.html
+│   │   │   │   │   └── login.component.scss
+│   │   │   │   └── auth.routes.ts
+│   │   │   │
+│   │   │   ├── dashboard/           # Wallet list + summary cards
+│   │   │   │   ├── dashboard.component.ts
+│   │   │   │   └── dashboard.routes.ts
+│   │   │   │
+│   │   │   ├── wallets/             # Wallet CRUD
+│   │   │   │   ├── wallet-list/
+│   │   │   │   ├── wallet-form/     # create/edit dialog
+│   │   │   │   ├── wallet-detail/   # assets + transactions tabs
+│   │   │   │   └── wallets.routes.ts
+│   │   │   │
+│   │   │   ├── assets/              # Asset CRUD within wallet
+│   │   │   │   ├── asset-list/
+│   │   │   │   ├── asset-form/
+│   │   │   │   └── assets.routes.ts
+│   │   │   │
+│   │   │   ├── transactions/        # Transaction CRUD per asset
+│   │   │   │   ├── transaction-list/
+│   │   │   │   ├── transaction-form/
+│   │   │   │   └── transactions.routes.ts
+│   │   │   │
+│   │   │   └── portfolio/           # Portfolio summary (GET /wallet/{id}/summary)
+│   │   │       ├── portfolio.component.ts
+│   │   │       └── portfolio.routes.ts
+│   │   │
+│   │   ├── layout/                  # App shell
+│   │   │   ├── header/
+│   │   │   ├── sidebar/
+│   │   │   └── layout.component.ts
+│   │   │
+│   │   ├── app.routes.ts            # Root routes + lazy loading
+│   │   ├── app.config.ts            # provideHttpClient, provideRouter, etc.
+│   │   └── app.component.ts
+│   │
+│   ├── assets/                      # Static assets
+│   ├── environments/
+│   │   ├── environment.ts
+│   │   └── environment.prod.ts
+│   ├── styles.scss                  # Tailwind + Material theme
+│   └── main.ts
+│
+├── angular.json
+├── package.json
+├── tsconfig.json
+├── tailwind.config.js
+├── jest.config.ts
+├── playwright.config.ts
+└── .github/workflows/ci.yml</div>
+
+<!-- ====================================================================== -->
+<h2>3. API Endpoints Mapping (Backend → Frontend)</h2>
+
+<table>
+  <thead>
+    <tr><th>Feature</th><th>Backend Endpoint</th><th>Frontend Service Method</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Auth</strong></td><td><code>POST /auth/login</code></td><td><code>authService.login(email, password)</code></td></tr>
+    <tr><td><strong>Users</strong></td><td><code>GET /users</code> (ADMIN)</td><td><code>userService.getAll()</code></td></tr>
+    <tr><td rowspan="5"><strong>Wallets</strong></td><td><code>POST /wallet</code></td><td><code>walletService.create(dto)</code></td></tr>
+    <tr><td><code>GET /wallet</code></td><td><code>walletService.getAll()</code></td></tr>
+    <tr><td><code>GET /wallet/{id}</code></td><td><code>walletService.getById(id)</code></td></tr>
+    <tr><td><code>PUT /wallet/{id}</code></td><td><code>walletService.update(id, dto)</code></td></tr>
+    <tr><td><code>DELETE /wallet/{id}</code></td><td><code>walletService.delete(id)</code></td></tr>
+    <tr><td rowspan="5"><strong>Assets</strong></td><td><code>POST /assets</code></td><td><code>assetService.create(dto)</code></td></tr>
+    <tr><td><code>GET /assets?walletId=</code></td><td><code>assetService.getByWallet(walletId)</code></td></tr>
+    <tr><td><code>GET /assets/{id}</code></td><td><code>assetService.getById(id)</code></td></tr>
+    <tr><td><code>PUT /assets/{id}</code></td><td><code>assetService.update(id, dto)</code></td></tr>
+    <tr><td><code>DELETE /assets/{id}</code></td><td><code>assetService.delete(id)</code></td></tr>
+    <tr><td rowspan="5"><strong>Transactions</strong></td><td><code>POST /transactions</code></td><td><code>txService.create(dto)</code></td></tr>
+    <tr><td><code>GET /transactions?assetId=</code></td><td><code>txService.getByAsset(assetId)</code></td></tr>
+    <tr><td><code>GET /transactions/{id}</code></td><td><code>txService.getById(id)</code></td></tr>
+    <tr><td><code>PUT /transactions/{id}</code></td><td><code>txService.update(id, dto)</code></td></tr>
+    <tr><td><code>DELETE /transactions/{id}</code></td><td><code>txService.delete(id)</code></td></tr>
+    <tr><td><strong>Portfolio</strong></td><td><code>GET /wallet/{id}/summary</code></td><td><code>portfolioService.getSummary(walletId)</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>4. Key UI Pages & Flows</h2>
+
+<div class="diagram">┌─────────────────────────────────────────────────────────────┐
+│  /login                  →  Login Page (email/password)     │
+│       │                                                   │
+│       ▼ (success)                                         │
+│  /dashboard               →  Wallet List + Quick Stats     │
+│       │                                                   │
+│       ├─► /wallets/new         →  Create Wallet Dialog    │
+│       │                                                   │
+│       ├─► /wallets/:id         →  Wallet Detail           │
+│       │       ├─► Assets Tab   →  Asset List + Add/Edit   │
+│       │       │       └─► /assets/new  →  Asset Form      │
+│       │       │       └─► /assets/:id  →  Asset Detail    │
+│       │       │                           └─► Transactions │
+│       │       │                                    Tab     │
+│       │       │                                    └─► /tx/new
+│       │       │                                    └─► /tx/:id
+│       │       └─► Portfolio Tab →  Summary (P&L, alloc)   │
+│       │                                                   │
+│       └─► /portfolio/:id       →  Full-screen summary     │
+└─────────────────────────────────────────────────────────────┘</div>
+
+<!-- ====================================================================== -->
+<h2>5. Core Implementation Details</h2>
+
+<h3>5.1 Auth Flow</h3>
+<pre><code>// auth.service.ts
+login(dto): Observable<LoginResponseDTO> → stores JWT in localStorage
+logout(): void → clears storage, navigates to /login
+isAuthenticated(): boolean → checks token expiry
+getToken(): string | null → for interceptor</code></pre>
+
+<h3>5.2 HTTP Interceptor Chain</h3>
+<pre><code>// auth.interceptor.ts
+req = req.clone({ setHeaders: { Authorization: <code>Bearer ${token}</code> } });
+
+// error.interceptor.ts
+401 → logout + redirect to /login
+403 → show "Access denied" toast
+500 → show "Server error" toast</code></pre>
+
+<h3>5.3 Portfolio Summary Component (Key Feature)</h3>
+<pre><code>// portfolio.component.ts
+summary = signal<PortfolioSummaryDTO | null>(null);
+loading = signal(true);
+warningAssets = computed(() => summary()?.assets.filter(a => a.warning) ?? []);</code></pre>
+
+<!-- ====================================================================== -->
+<h2>6. Phased Implementation</h2>
+
+<table>
+  <thead>
+    <tr><th>Phase</th><th>Scope</th><th>Deliverable</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>0</strong></td><td>Project init</td><td><code>ng new</code>, Tailwind, Material, ESLint/Prettier, CI</td></tr>
+    <tr><td><strong>1</strong></td><td>Auth + Layout</td><td>Login, JWT interceptor, guards, header/sidebar</td></tr>
+    <tr><td><strong>2</strong></td><td>Dashboard + Wallets</td><td>Wallet CRUD, list, create dialog</td></tr>
+    <tr><td><strong>3</strong></td><td>Assets</td><td>Asset CRUD within wallet, inline forms</td></tr>
+    <tr><td><strong>4</strong></td><td>Transactions</td><td>Transaction CRUD per asset, BUY/SELL forms</td></tr>
+    <tr><td><strong>5</strong></td><td>Portfolio Summary</td><td><code>/wallet/{id}/summary</code> view with charts (ngx-charts or Chart.js)</td></tr>
+    <tr><td><strong>6</strong></td><td>Polish</td><td>Validation, toasts, loading states, responsive, a11y</td></tr>
+    <tr><td><strong>7</strong></td><td>Deploy</td><td>Docker multi-stage (nginx + Angular build), docker-compose</td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>7. Open Decisions (Need Your Input)</h2>
+
+<table>
+  <thead>
+    <tr><th>Decision</th><th>Options</th><th>Recommendation</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>State mgmt</td><td>Signals (built-in) vs NgRx</td><td><strong>Signals</strong> — sufficient for this scope</td></tr>
+    <tr><td>Charts</td><td>ngx-charts, Chart.js, ApexCharts</td><td><strong>ngx-charts</strong> (Angular-native, D3-based)</td></tr>
+    <tr><td>Date picker</td><td>Material datepicker vs native <code><input type="date"></code></td><td><strong>Native</strong> — lighter, works mobile</td></tr>
+    <tr><td>Table</td><td>Material Table vs custom + TanStack Table</td><td><strong>Material Table</strong> — sorting/pagination built-in</td></tr>
+    <tr><td>Monorepo?</td><td>Separate repo vs Nx workspace with backend</td><td><strong>Separate repos</strong> — simpler CI, independent deploys</td></tr>
+    <tr><td>Env config</td><td><code>environment.ts</code> vs runtime <code>window.__env</code></td><td><strong>Runtime config</strong> — same Docker image for dev/staging/prod</td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>8. Docker Integration (Frontend)</h2>
+
+<h3>Dockerfile</h3>
+<pre><code># Build stage
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build -- --configuration production
+
+# Runtime stage
+FROM nginx:alpine
+COPY --from=build /app/dist/visualizer/browser /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80</code></pre>
+
+<h3>docker-compose.yml (add to existing)</h3>
+<pre><code>  frontend:
+    build:
+      context: ./visualizer
+      dockerfile: Dockerfile
+    ports:
+      - "4200:80"
+    depends_on:
+      - app
+    environment:
+      - API_URL=http://app:8080</code></pre>
+
+<!-- ====================================================================== -->
+<h2>9. Next Steps</h2>
+
+<ol>
+  <li><strong>Confirm decisions</strong> in §7</li>
+  <li><strong>Create repo</strong> (<code>visualizer</code>) with Angular 18 + Vite</li>
+  <li><strong>Phase 0</strong> — scaffolding, linting, CI</li>
+  <li><strong>Phase 1</strong> — auth + layout (highest value first)</li>
+</ol>
+
+<h2>Questions for you:</h2>
+<ol>
+  <li>Monorepo (Nx) or separate frontend repo?</li>
+  <li>Preferred chart library (ngx-charts vs Chart.js)?</li>
+  <li>Runtime env config or build-time <code>environment.ts</code>?</li>
+  <li>Any specific UI/UX requirements (dark mode, mobile-first)?</li>
+</ol>
+
+<footer>
+  visualizer · Angular 18+ · TypeScript · Investment Wallet Frontend
+</footer>
+
+</div>
+</body>
+</html>

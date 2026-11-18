@@ -1,0 +1,552 @@
+<!-- Histórico, arquivado em 2026-11-17.
+     Origem: consolidator/implementation_plan.html
+     Substituído por: specs/ e docs/adr/ do mywallet-hub (spec 003) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Consolidator — Implementation Plan</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --code-bg: #1c2128;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem 1rem;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; color: #fff; }
+  .subtitle { color: var(--text-dim); margin-bottom: 2rem; font-size: 1rem; }
+  h2 {
+    font-size: 1.4rem;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+    color: #fff;
+  }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.6rem; color: var(--accent); }
+  h4 { margin: 1rem 0 0.4rem; color: var(--text); }
+
+  p, li { color: var(--text); }
+  a { color: var(--accent); }
+
+  .phase-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .phase-card h3 { margin-top: 0; }
+  .phase-card ul { padding-left: 1.25rem; }
+  .phase-card li { margin-bottom: 0.35rem; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0 1.25rem;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); font-weight: 600; color: var(--text-dim); }
+
+  code, .code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  .diagram {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--text);
+  }
+
+  .status-done { color: var(--green); }
+  .status-missing { color: var(--red); }
+  .status-partial { color: var(--orange); }
+
+  .callout {
+    background: var(--code-bg);
+    border-left: 4px solid var(--accent);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.9rem;
+  }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Consolidator — Implementation Plan</h1>
+<p class="subtitle">
+  Investment wallet consolidator &middot; Spring Boot 3.5.6 / Java 17 / Maven<br>
+  <em>Phases 0–5</em>
+</p>
+
+<!-- ====================================================================== -->
+<h2>1. Current State Assessment</h2>
+
+<p>
+  The application is a <strong>scaffold with 5 basic CRUD endpoints</strong>
+  (create + list for users, assets, and wallets). The Brapi.dev external API
+  is wired in but only called during wallet creation. Several entities and
+  enums are defined but dead. There are no tests beyond a context-load
+  check, no authentication, and no consolidation logic.
+</p>
+
+<h3>1.1 Existing REST Endpoints</h3>
+<table>
+  <thead>
+    <tr><th>Method</th><th>Path</th><th>Controller</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>POST</code></td><td><code>/users</code></td><td><code>UserResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>GET</code></td><td><code>/users</code></td><td><code>UserResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>POST</code></td><td><code>/assets</code></td><td><code>AssetResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>GET</code></td><td><code>/assets?walletId=</code></td><td><code>AssetResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>POST</code></td><td><code>/wallet</code></td><td><code>WalletResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>GET</code></td><td><code>/wallet?userId=</code></td><td><code>WalletResource</code></td><td class="status-done">Exists</td></tr>
+    <tr><td><code>POST</code></td><td><code>/auth/login</code></td><td>—</td><td class="status-missing">Missing</td></tr>
+    <tr><td><code>POST</code></td><td><code>/transactions</code></td><td>—</td><td class="status-missing">Missing</td></tr>
+    <tr><td><code>GET</code></td><td><code>/transactions</code></td><td>—</td><td class="status-missing">Missing</td></tr>
+    <tr><td><code>GET</code></td><td><code>/wallet/{id}/summary</code></td><td>—</td><td class="status-missing">Missing</td></tr>
+    <tr><td><code>PUT</code></td><td>all resources</td><td>—</td><td class="status-missing">Missing</td></tr>
+    <tr><td><code>DELETE</code></td><td>all resources</td><td>—</td><td class="status-missing">Missing</td></tr>
+  </tbody>
+</table>
+
+<h3>1.2 Entity / DTO / Service Map</h3>
+<table>
+  <thead>
+    <tr><th>Entity</th><th>DTO</th><th>Repository</th><th>Service</th><th>Controller</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>User</code></td>
+      <td><code>UserDTO</code></td>
+      <td><code>UserRepository</code></td>
+      <td><code>UserService</code></td>
+      <td><code>UserResource</code></td>
+      <td class="status-done">Complete</td>
+    </tr>
+    <tr>
+      <td><code>Wallet</code></td>
+      <td><code>WalletDTO</code></td>
+      <td><code>WalletRepository</code></td>
+      <td><code>WalletService</code></td>
+      <td><code>WalletResource</code></td>
+      <td class="status-done">Complete</td>
+    </tr>
+    <tr>
+      <td><code>Asset</code></td>
+      <td><code>AssetDTO</code></td>
+      <td><code>AssetRepository</code></td>
+      <td><code>AssetService</code></td>
+      <td><code>AssetResource</code></td>
+      <td class="status-done">Complete</td>
+    </tr>
+    <tr>
+      <td><code>Transaction</code></td>
+      <td class="status-missing">Missing</td>
+      <td class="status-missing">Missing</td>
+      <td class="status-missing">Missing</td>
+      <td class="status-missing">Missing</td>
+      <td class="status-partial">Entity only, dead</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1.3 Known Issues (pre-existing)</h3>
+<table>
+  <thead><tr><th>Issue</th><th>Severity</th><th>File(s)</th></tr></thead>
+  <tbody>
+    <tr><td>Password hash leaked in all user responses</td><td style="color:var(--red)">High</td><td><code>UserResource</code>, <code>UserService</code></td></tr>
+    <tr><td><code>BrapiAdapter</code> annotated <code>@RestController</code> but has no HTTP endpoints</td><td style="color:var(--orange)">Medium</td><td><code>BrapiAdapter.java</code></td></tr>
+    <tr><td>Fair value formula conflict — both <code>enrichAsset()</code> (PE×EPS) and <code>populateNewAsset()</code> (Graham) run in sequence</td><td style="color:var(--orange)">Medium</td><td><code>AssetDataToAssetMapper</code>, <code>AssetService</code></td></tr>
+    <tr><td><code>new RestTemplate()</code> created per call instead of injected bean</td><td style="color:var(--text-dim)">Low</td><td><code>BrapiAdapter</code></td></tr>
+    <tr><td>JPA annotations (<code>@Id</code>, <code>@GeneratedValue</code>) on DTO records (no-op)</td><td style="color:var(--text-dim)">Low</td><td><code>UserDTO</code>, <code>WalletDTO</code></td></tr>
+    <tr><td><code>@RequestParam</code> in service layer — annotation has no effect there</td><td style="color:var(--text-dim)">Low</td><td><code>AssetService</code>, <code>WalletService</code></td></tr>
+    <tr><td>Dead code: commented-out blocks, unused imports, misleading method names (<code>createAdmin</code>)</td><td style="color:var(--text-dim)">Low</td><td>6 files</td></tr>
+    <tr><td><code>updateAssetValues()</code> is private and never called</td><td style="color:var(--text-dim)">Low</td><td><code>AssetService</code></td></tr>
+    <tr><td><code>Wallet</code> entity missing <code>@AllArgsConstructor</code></td><td style="color:var(--text-dim)">Low</td><td><code>Wallet.java</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>2. Architecture (Target)</h2>
+
+<div class="diagram">                    ┌─────────────────┐
+                    │  Brapi API       │
+                    │  brapi.dev       │
+                    └────────┬────────┘
+                             │ HTTP
+                             ▼
+  ┌───────────┐    ┌──────────────────┐    ┌──────────────┐
+  │  Client   │───▶  Controllers      │───▶  Services    │
+  │ (REST)    │◀───  (Resources)      │◀───              │
+  └───────────┘    └──────────────────┘    └──────┬───────┘
+                                                  │
+                    ┌─────────────────────────────┼──────────┐
+                    │           JPA / Database     │          │
+                    │  ┌────────┐  ┌──────────┐   │          │
+                    │  │  User  │──│  Wallet  │   │          │
+                    │  └────────┘  └────┬─────┘   │          │
+                    │                   │         │          │
+                    │              ┌────▼─────┐   │          │
+                    │              │  Asset   │   │          │
+                    │              └────┬─────┘   │          │
+                    │                   │         │          │
+                    │              ┌────▼──────┐  │          │
+                    │              │Transaction│  │          │
+                    │              └───────────┘  │          │
+                    └─────────────────────────────┘──────────┘
+
+  ┌────────────────────────────────────────────────────────┐
+  │  Spring Security + JWT Filter                          │
+  │  /auth/login ──  JwtService ──  Bearer Token           │
+  │  All other endpoints ──  JwtAuthFilter ──  401         │
+  └────────────────────────────────────────────────────────┘</div>
+
+<h3>2.1 Package Layout</h3>
+<pre style="background:var(--code-bg); padding:0.75rem 1rem; border-radius:6px; font-size:0.85rem; overflow-x:auto;">
+com.mywallet.consolidator
+├── ConsolidatorApplication.java
+├── common/
+│   ├── configs/
+│   │   └── SecurityConfig.java
+│   └── utils/
+│       └── GenericExceptionHandler.java
+├── controllers/
+│   ├── UserResource.java          (/users)
+│   ├── AssetResource.java         (/assets)
+│   ├── WalletResource.java        (/wallet)
+│   ├── BrapiAdapter.java          ( @Service, external API)
+│   ├── AuthController.java        (🆕 /auth/login)
+│   └── TransactionResource.java   (🆕 /transactions)
+├── services/
+│   ├── UserService.java
+│   ├── AssetService.java
+│   ├── WalletService.java
+│   ├── TransactionService.java    (🆕)
+│   ├── ConsolidationService.java  (🆕)
+│   └── JwtService.java            (🆕)
+├── security/
+│   ├── JwtAuthFilter.java         (🆕)
+│   └── UserDetailsServiceImpl.java (🆕)
+├── repositories/
+│   ├── UserRepository.java
+│   ├── AssetRepository.java
+│   ├── WalletRepository.java
+│   └── TransactionRepository.java (🆕)
+├── models/
+│   ├── User.java
+│   ├── Wallet.java
+│   ├── Asset.java
+│   └── Transaction.java
+├── dtos/
+│   ├── UserDTO.java
+│   ├── UserResponseDTO.java       (🆕)
+│   ├── AssetDTO.java
+│   ├── AssetResponseDTO.java      (🆕)
+│   ├── WalletDTO.java
+│   ├── WalletResponseDTO.java     (🆕)
+│   ├── AssetDataDTO.java
+│   ├── AdapterResponseDTO.java
+│   ├── TransactionDTO.java        (🆕)
+│   ├── LoginRequestDTO.java       (🆕)
+│   ├── LoginResponseDTO.java      (🆕)
+│   └── PortfolioSummaryDTO.java   (🆕)
+├── mappers/
+│   └── AssetDataToAssetMapper.java
+└── enums/
+    ├── AssetType.java
+    └── TransactionType.java</pre>
+
+<!-- ====================================================================== -->
+<h2>3. Phased Implementation Plan</h2>
+
+<!-- ---------- PHASE 0 ---------- -->
+<div class="phase-card">
+  <h3>Phase 0 — Cleanup &amp; Bug Fixes</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    Housekeeping before adding features. Every item here will cause confusion
+    or defects during later phases if left unfixed.
+  </p>
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>0.1</td><td>Change <code>BrapiAdapter</code> from <code>@RestController</code> to <code>@Service</code></td><td>It has no HTTP endpoints. Misleading annotation.</td></tr>
+      <tr><td>0.2</td><td>Make <code>RestTemplate</code> a <code>@Bean</code> in config, inject into <code>BrapiAdapter</code></td><td>Avoid creating HTTP client per call; enables mocking in tests.</td></tr>
+      <tr><td>0.3</td><td>Resolve fair-value formula: keep Graham (<code>√(22.5 × PE × EPS)</code>), remove <code>PE × EPS</code> from <code>enrichAsset</code></td><td>Both run in sequence; last wins. Pick one.</td></tr>
+      <tr><td>0.4</td><td>Remove JPA annotations from <code>UserDTO</code> and <code>WalletDTO</code> records</td><td>They do nothing on records — belong on entities only.</td></tr>
+      <tr><td>0.5</td><td>Create response DTOs without <code>password</code>; update controllers to use them</td><td>Password hash currently leaks in every user response (security).</td></tr>
+      <tr><td>0.6</td><td>Remove <code>@RequestParam</code> from service-layer method signatures</td><td>Spring MVC annotation has no effect in <code>@Service</code> beans.</td></tr>
+      <tr><td>0.7</td><td>Rename <code>createAdmin</code> → <code>createUser</code> / <code>createWallet</code></td><td>Misleading — creates a regular user/wallet, not an admin.</td></tr>
+      <tr><td>0.8</td><td>Add <code>@AllArgsConstructor</code> to <code>Wallet</code></td><td>Consistency across entities.</td></tr>
+      <tr><td>0.9</td><td>Remove dead imports, commented-out blocks, unused variables</td><td>Reduce noise.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ---------- PHASE 1 ---------- -->
+<div class="phase-card">
+  <h3>Phase 1 — JWT Authentication</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    Users can register but cannot log in. Add a full JWT auth flow so that
+    endpoints can be protected.
+  </p>
+  <p style="margin-bottom:0.5rem;"><strong>Dependency:</strong> <code>io.jsonwebtoken:jjwt-api:0.12.6</code> + runtime jars</p>
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>1.1</td><td>Add <code>jjwt</code> dependency to <code>pom.xml</code></td><td>api, impl, jackson — all 0.12.6</td></tr>
+      <tr><td>1.2</td><td>Create <code>security/</code> package</td><td>Move security classes here.</td></tr>
+      <tr><td>1.3</td><td>Create <code>JwtService</code></td><td><code>generateToken()</code>, <code>extractUsername()</code>, <code>isTokenValid()</code>. Reads <code>app.jwt.secret</code>.</td></tr>
+      <tr><td>1.4</td><td>Create <code>JwtAuthFilter</code></td><td>Extract Bearer token, validate, set SecurityContext.</td></tr>
+      <tr><td>1.5</td><td>Create <code>UserDetailsServiceImpl</code></td><td>Load user from DB by email.</td></tr>
+      <tr><td>1.6</td><td>Create <code>AuthController</code> (<code>POST /auth/login</code>)</td><td>Accept email+password, return JWT token.</td></tr>
+      <tr><td>1.7</td><td>Create <code>LoginRequestDTO</code> / <code>LoginResponseDTO</code></td><td>Request: email, password. Response: token.</td></tr>
+      <tr><td>1.8</td><td>Add config to <code>application.properties</code></td><td><code>app.jwt.secret</code>, <code>app.jwt.expiration</code></td></tr>
+      <tr><td>1.9</td><td>Update <code>SecurityConfig</code></td><td>Permit <code>/auth/login</code> + <code>/h2-console/**</code>. Protect everything else. Register JWT filter.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ---------- PHASE 2 ---------- -->
+<div class="phase-card">
+  <h3>Phase 2 — Transaction Management</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    The <code>Transaction</code> entity exists as dead scaffolding. Build the
+    full layer: DTO, repository, service, controller — and wire BUY/SELL
+    into asset cost-basis tracking.
+  </p>
+
+  <h4>2.1 New Files</h4>
+  <table>
+    <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>dtos/TransactionDTO.java</code></td><td>Record: <code>assetTicker</code>, <code>amount</code>, <code>unitPrice</code>, <code>type</code> (BUY/SELL), <code>transactionDate</code></td></tr>
+      <tr><td><code>repositories/TransactionRepository.java</code></td><td><code>JpaRepository</code> with <code>findByAssetId(Long)</code></td></tr>
+      <tr><td><code>services/TransactionService.java</code></td><td><code>recordTransaction(TransactionDTO)</code> — create transaction, update Asset</td></tr>
+      <tr><td><code>controllers/TransactionResource.java</code></td><td><code>POST /transactions</code>, <code>GET /transactions?assetId=</code></td></tr>
+    </tbody>
+  </table>
+
+  <h4>2.2 Asset Update Rules on Transaction</h4>
+  <table>
+    <thead><tr><th>Operation</th><th>Asset Field Updates</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>BUY</strong></td>
+        <td>
+          <code>amount += tx.amount</code><br>
+          <code>mediumPrice = weighted avg(old, new)</code><br>
+          <code>totalInvested = mediumPrice × amount</code>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>SELL</strong></td>
+        <td>
+          <code>amount -= tx.amount</code><br>
+          <code>totalInvested = mediumPrice × amount</code> (proportional cost basis)
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>2.3 Enable Enum Fields</h4>
+  <ul>
+    <li>Uncomment <code>TransactionType type</code> in <code>Transaction.java</code> — wire to DTO</li>
+    <li>Uncomment <code>AssetType type</code> in <code>Asset.java</code> — add to <code>AssetDTO</code></li>
+  </ul>
+</div>
+
+<!-- ---------- PHASE 3 ---------- -->
+<div class="phase-card">
+  <h3>Phase 3 — Portfolio Consolidation</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    The core feature: a single endpoint returning a fully calculated portfolio
+    summary for a wallet — live prices, allocation, and P&amp;L.
+  </p>
+
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>3.1</td>
+        <td>Create <code>PortfolioSummaryDTO</code></td>
+        <td>
+          Nested records: wallet-level totals + per-asset breakdown with
+          currentPrice, mediumPrice, totalInvested, profitLoss, allocation%.
+        </td>
+      </tr>
+      <tr>
+        <td>3.2</td>
+        <td>Create <code>ConsolidationService</code></td>
+        <td>
+          Load wallet + assets, fetch live prices from Brapi (per-request
+          cache to avoid N+1), compute metrics, handle failed tickers gracefully.
+        </td>
+      </tr>
+      <tr>
+        <td>3.3</td>
+        <td>Create consolidation endpoint</td>
+        <td><code>GET /wallet/{walletId}/summary</code></td>
+      </tr>
+      <tr>
+        <td>3.4</td>
+        <td>Graceful Brapi degradation</td>
+        <td>Failed ticker → include asset with <code>currentValue = null</code> + warning flag. Don't fail the whole request.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ---------- PHASE 4 ---------- -->
+<div class="phase-card">
+  <h3>Phase 4 — Tests & Polish</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    Zero meaningful tests currently. Add unit, integration, and security tests
+    plus operational polish.
+  </p>
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>4.1</td><td>Service unit tests</td><td><code>@ExtendWith(MockitoExtension.class)</code> for each service</td></tr>
+      <tr><td>4.2</td><td>Controller integration tests</td><td><code>@WebMvcTest</code> for each resource</td></tr>
+      <tr><td>4.3</td><td>JWT auth tests</td><td>Verify protected endpoints reject no/bad token. Verify login returns token.</td></tr>
+      <tr><td>4.4</td><td>BrapiAdapter mock test</td><td><code>MockRestServiceServer</code> for Brapi API simulation</td></tr>
+      <tr><td>4.5</td><td>MapStruct mapper test</td><td>Verify <code>symbol → ticker</code> and other mappings</td></tr>
+      <tr><td>4.6</td><td>Repository tests</td><td><code>@DataJpaTest</code> for custom queries</td></tr>
+      <tr><td>4.7</td><td>Dockerfile</td><td>Multi-stage: Maven wrapper → <code>mvnw package</code> → <code>eclipse-temurin:17-jre</code></td></tr>
+      <tr><td>4.8</td><td><code>docker-compose.yml</code></td><td>App + PostgreSQL, env vars for secrets</td></tr>
+      <tr><td>4.9</td><td>PUT/DELETE endpoints (all resources)</td><td>Complete full CRUD for users, wallets, assets, transactions</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ---------- PHASE 5 ---------- -->
+<div class="phase-card">
+  <h3>Phase 5 — Production Persistence & Docker</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    Replace in-memory H2 with persistent PostgreSQL, containerize the app,
+    and configure production-ready settings.
+  </p>
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>5.1</td><td>PostgreSQL configuration</td><td>Create <code>application-prod.properties</code> with PostgreSQL datasource, disable H2 console, enable <code>ddl-auto=validate</code></td></tr>
+      <tr><td>5.2</td><td>Dockerfile (multi-stage)</td><td>Build stage: <code>maven:3.9-eclipse-temurin-17</code> → <code>./mvnw package -DskipTests</code>; Runtime stage: <code>eclipse-temurin:17-jre-alpine</code>, copy jar, non-root user</td></tr>
+      <tr><td>5.3</td><td><code>docker-compose.yml</code></td><td>Services: <code>app</code> (build from Dockerfile), <code>postgres</code> (official image). Networks, volumes for DB persistence. Env vars: <code>BRAPI_TOKEN</code>, <code>JWT_SECRET</code>, <code>DB_PASSWORD</code></td></tr>
+      <tr><td>5.4</td><td>Environment variable config</td><td>Externalize all secrets: <code>SPRING_DATASOURCE_URL</code>, <code>SPRING_DATASOURCE_USERNAME</code>, <code>SPRING_DATASOURCE_PASSWORD</code>, <code>APP_JWT_SECRET</code>, <code>BRAPI_TOKEN</code>. Use <code>.env</code> for local dev</td></tr>
+      <tr><td>5.5</td><td>Health checks</td><td>Spring Boot Actuator: <code>/actuator/health</code>, <code>/actuator/info</code>. Docker HEALTHCHECK in Dockerfile</td></tr>
+      <tr><td>5.6</td><td>Logging configuration</td><td><code>logback-spring.xml</code>: JSON format for production, console for dev, log levels per package, rolling file appender</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ---------- PHASE 6 ---------- -->
+<div class="phase-card">
+  <h3>Phase 6 — DevEx Improvements</h3>
+  <p style="color:var(--text-dim); margin-bottom:0.75rem;">
+    Developer experience enhancements for local development and debugging.
+  </p>
+  <table>
+    <thead><tr><th style="width:30px;">#</th><th>Task</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>6.1</td><td>Add pgAdmin to docker-compose</td><td>Service: <code>pgadmin</code> (image <code>dpage/pgadmin4</code>), port 5050, auto-configured server connection to <code>postgres</code>. Only enabled via <code>docker-compose --profile dev up</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ====================================================================== -->
+<h2>4. Summary Timeline</h2>
+
+<table>
+  <thead><tr><th>Phase</th><th>Focus</th><th>Deliverable</th></tr></thead>
+  <tbody>
+    <tr><td><strong>0</strong></td><td>Cleanup & bugs</td><td>Codebase ready for feature work</td></tr>
+    <tr><td><strong>1</strong></td><td>JWT auth</td><td>Working login + protected endpoints</td></tr>
+    <tr><td><strong>2</strong></td><td>Transactions</td><td>BUY/SELL tracking with cost-basis updates</td></tr>
+    <tr><td><strong>3</strong></td><td>Portfolio consolidation</td><td>Live portfolio summary with P&L</td></tr>
+    <tr><td><strong>4</strong></td><td>Tests & polish</td><td>Production-adjacent quality</td></tr>
+    <tr><td><strong>5</strong></td><td>Production persistence & Docker</td><td>Containerized app with PostgreSQL, health checks, logging</td></tr>
+    <tr><td><strong>6</strong></td><td>DevEx improvements</td><td>pgAdmin for local DB management</td></tr>
+  </tbody>
+</table>
+
+<!-- ====================================================================== -->
+<h2>5. Open Questions</h2>
+
+<ol>
+  <li>
+    <strong>JWT secret config</strong> — Hardcode a dev fallback in
+    <code>application.properties</code> and override via env var in production?
+    Or require env var only (fail at startup if missing)?
+  </li>
+  <li>
+    <strong>Fair-value formula</strong> — The Graham formula
+    <code>√(22.5 × PE × EPS)</code> is the effective logic (runs second).
+    Can we remove the simpler <code>PE × EPS</code> from <code>enrichAsset()</code>
+    and keep only the Graham number?
+  </li>
+  <li>
+    <strong>Missing Lombok on Wallet</strong> — Add <code>@AllArgsConstructor</code>
+    to <code>Wallet.java</code> for consistency?
+  </li>
+  <li>
+    <strong>Swagger / OpenAPI</strong> — Do you want it as part of Phase 4?
+  </li>
+  <li>
+    <strong>PUT &amp; DELETE</strong> — Add full CRUD for all resources in Phase 4,
+    or skip for now?
+  </li>
+</ol>
+
+<footer>
+  consolidator &middot; Spring Boot 3.5.6 / Java 17
+</footer>
+
+</div>
+</body>
+</html>

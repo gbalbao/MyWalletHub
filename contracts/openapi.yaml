@@ -1,0 +1,3065 @@
+openapi: 3.1.0
+info:
+  title: MyWallet Consolidator API
+  description: |
+    API do Consolidator (MyWallet): usuarios, carteiras, ativos, transacoes, proventos, valuation e historico patrimonial.
+
+    **Este contrato descreve a API exatamente como ela e hoje**, incluindo os problemas conhecidos abaixo. Nada foi corrigido ao documentar.
+
+    ## Autenticacao
+    - Publicas: `/auth/**` e `POST /users`. Todo o resto exige `Authorization: Bearer <jwt>` (token de `POST /auth/login`).
+    - `GET /users` e `GET /users/{id}` exigem papel ADMIN (`GET /users/**`); sem ADMIN a resposta e 401 (corpo vazio), nao 403.
+    - Sem token valido: 401 (corpo vazio). Recurso de outro usuario: 403 com `{error}`. Nao encontrado: 404 com `{error}`.
+
+    ## Convencoes
+    - **Valores monetarios**: BRL implicito, `double` sem arredondamento.
+    - **Percentuais**: de 0 a 100 (`profitLossPercentage`, `allocationPercentage`, `totalProfitLossPercentage`). Excecao: `annualizedVolatility` e fracao de 0 a 1.
+    - **Datas**: `LocalDate` (`yyyy-MM-dd`) em transacoes, historico, snapshots e volatilidade; `java.util.Date` (date-time) em `computedAt`, `paymentDate` e `exDate`; `Instant` (date-time UTC) em `generatedAt`.
+    - **null**: preco ou valor ausente significa "sem dado", nunca zero.
+    - **Erros**: tres formatos. Validacao `{campo: mensagem}`; generico `{error}`; regra de negocio `{error, code}` com `code` em SELL_BEFORE_PURCHASE, INSUFFICIENT_POSITION, FUTURE_TRANSACTION_DATE.
+
+    ## Problemas conhecidos
+    | ID | Problema como esta hoje | Spec que corrige |
+    |---|---|---|
+    | C1 | `AssetResponseDTO.currentValue` e o preco unitario gravado no cadastro e nunca atualizado; em `AssetSummaryDTO.currentValue` e o valor total da posicao | 004 |
+    | C2 | O front calcula P&L localmente; o P&L oficial vem de `PortfolioTotalsDTO.totalProfitLoss` e `pricedInvested` | 004 |
+    | C5 | `AssetResponseDTO.fairValue` e Graham automatico (`sqrt(22.5*PE*EPS)`), calculado so no cadastro e ao trocar o ticker | 004 |
+    | C3 | `transactionDate` e `acquisitionDate` esperam `yyyy-MM-dd`; o ADC envia `...T00:00:00.000Z` e so funciona pela tolerancia do Jackson | 005 |
+    | C6 | `computedAt`, `paymentDate` e `exDate` sao `java.util.Date`; o resto da API usa `LocalDate` | 005 |
+    | C4 | Volatilidade em fracao (0 a 1); os demais percentuais em 0 a 100 | 006 |
+    | C7 | Moeda e momento da cotacao nao sao expostos | 006 |
+    | C10 | `walletId` e `String` em `AssetCreateDTO` e `Long` no resto | 006 |
+    | - | `PUT/DELETE /users/{id}` nao verificam o dono; `@PreAuthorize` nao tem efeito | 002 |
+    | - | `DELETE /wallet/{id}` com ativos provavelmente falha por FK (400 generico) | 002 |
+    | - | `POST /wallet` com `assets` nulo responde 400 (NPE) | 002 |
+    | - | Falha da Brapi em `getAssetData` vira 400 no summary, no total e em `POST /assets` | 008 |
+    | - | `Asset.assetType` nunca e preenchido | 010 |
+    | - | Erros gerados por `sendError` (404 de rota inexistente, 405, 415, `@RequestParam` obrigatorio ausente, 403 de papel ADMIN) respondem 401 sem corpo no servidor real, porque `/error` / `DispatcherType.ERROR` nao esta liberado no SecurityConfig; em MockMvc aparecem com o status original. O 404 de recurso (`EntityNotFoundException`) nao e afetado | 002 |
+    | C8 | Rotas que mudaram sem registro (proventos sem filtro = todas as carteiras; sync por id ou ticker; `/transactions` sem filtro = tudo do usuario; `POST /wallet/{id}/assets/merge`) | Resolvido: documentadas aqui |
+  version: 0.1.0
+servers:
+- url: http://localhost:8080
+  description: Local
+security:
+- bearerAuth: []
+tags:
+- name: Transactions
+  description: "Ledger de compras e vendas (BUY/SELL) e resultado realizado. A posicao\
+    \ do ativo (amount, mediumPrice, totalInvested) deriva deste ledger."
+- name: Users
+  description: Cadastro e consulta de usuarios.
+- name: Dividends
+  description: Proventos recebidos (manuais ou sincronizados da Brapi).
+- name: Wallets
+  description: "Carteiras do usuario autenticado, resumo vivo, historico e volatilidade.\
+    \ As carteiras sempre sao escopadas pelo token."
+- name: Auth
+  description: Login (publico).
+- name: Assets
+  description: "Ativos (posicoes) e valuations. Posicao (amount, mediumPrice, totalInvested)\
+    \ deriva do ledger de transacoes."
+paths:
+  /wallet/{id}:
+    get:
+      tags:
+      - Wallets
+      summary: Buscar carteira por id
+      description: Carteira de outro usuario responde 403.
+      operationId: getWalletById
+      parameters:
+      - name: id
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Carteira.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags:
+      - Wallets
+      summary: Atualizar carteira
+      description: Atualiza nome e descricao. Carteira de outro usuario responde 403.
+      operationId: updateWallet
+      parameters:
+      - name: id
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletDTO"
+        required: true
+      responses:
+        "200":
+          description: Carteira atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags:
+      - Wallets
+      summary: Excluir carteira
+      description: "PROBLEMA CONHECIDO (spec 002): excluir carteira com ativos provavelmente\
+        \ falha por FK e responde 400 generico. Carteira de outro usuario responde\
+        \ 403."
+      operationId: deleteWallet
+      parameters:
+      - name: id
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "204":
+          description: Excluida. Sem corpo.
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/{id}:
+    get:
+      tags:
+      - Users
+      summary: Buscar usuario por id (ADMIN)
+      description: "Exige papel ADMIN (GET /users/**); sem ADMIN responde 401 (corpo\
+        \ vazio), nao 403. Usuario inexistente responde 404."
+      operationId: getById
+      parameters:
+      - name: id
+        in: path
+        description: Id do usuario.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponseDTO"
+        "404":
+          description: Usuario nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+    put:
+      tags:
+      - Users
+      summary: Atualizar usuario
+      description: "PROBLEMA CONHECIDO (spec 002): nao verifica o dono. Qualquer usuario\
+        \ autenticado pode alterar qualquer usuario; o @PreAuthorize da classe nao\
+        \ tem efeito nesta rota. Usuario inexistente responde 404."
+      operationId: updateUser
+      parameters:
+      - name: id
+        in: path
+        description: Id do usuario.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserDTO"
+        required: true
+      responses:
+        "200":
+          description: Usuario atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponseDTO"
+        "404":
+          description: Usuario nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+    delete:
+      tags:
+      - Users
+      summary: Excluir usuario
+      description: "PROBLEMA CONHECIDO (spec 002): nao verifica o dono. Qualquer usuario\
+        \ autenticado pode excluir qualquer usuario. Usuario inexistente responde\
+        \ 404."
+      operationId: deleteUser
+      parameters:
+      - name: id
+        in: path
+        description: Id do usuario.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "204":
+          description: Excluido. Sem corpo.
+        "404":
+          description: Usuario nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+  /transactions/{id}:
+    get:
+      tags:
+      - Transactions
+      summary: Buscar transacao por id
+      description: Transacao de outro usuario responde 403.
+      operationId: getById_1
+      parameters:
+      - name: id
+        in: path
+        description: Id da transacao.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Transacao.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags:
+      - Transactions
+      summary: Atualizar transacao
+      description: Substitui os dados da transacao e recalcula a posicao pelo replay.
+        Mesmas regras de negocio (400 com code) e mesmo formato de data do POST.
+      operationId: updateTransaction
+      parameters:
+      - name: id
+        in: path
+        description: Id da transacao.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionDTO"
+        required: true
+      responses:
+        "200":
+          description: Transacao atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags:
+      - Transactions
+      summary: Excluir transacao
+      description: Remove a transacao e recalcula a posicao pelo replay. Transacao
+        de outro usuario responde 403.
+      operationId: deleteTransaction
+      parameters:
+      - name: id
+        in: path
+        description: Id da transacao.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "204":
+          description: Excluida. Sem corpo.
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /assets/{id}:
+    get:
+      tags:
+      - Assets
+      summary: Buscar ativo por id
+      description: Ativo de outro usuario responde 403.
+      operationId: getById_2
+      parameters:
+      - name: id
+        in: path
+        description: Id do ativo.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Ativo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags:
+      - Assets
+      summary: Atualizar ticker do ativo
+      description: "So o ticker e editavel (corpo com qualquer outro campo responde\
+        \ 400). Ao trocar o ticker, nome e fairValue (Graham, C5) sao recalculados\
+        \ pela Brapi. Posicao so muda por transacoes."
+      operationId: updateAsset
+      parameters:
+      - name: id
+        in: path
+        description: Id do ativo.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetUpdateDTO"
+        required: true
+      responses:
+        "200":
+          description: Ativo atualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags:
+      - Assets
+      summary: Excluir ativo
+      description: Ativo de outro usuario responde 403.
+      operationId: deleteAsset
+      parameters:
+      - name: id
+        in: path
+        description: Id do ativo.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "204":
+          description: Excluido. Sem corpo.
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet:
+    get:
+      tags:
+      - Wallets
+      summary: Listar carteiras do usuario
+      description: Somente carteiras do usuario do token.
+      operationId: getAllWallet
+      responses:
+        "200":
+          description: Carteiras do usuario (lista vazia se nao houver).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WalletResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+    post:
+      tags:
+      - Wallets
+      summary: Criar carteira
+      description: "A carteira pertence ao usuario do token. Cada item de assets abre\
+        \ uma posicao (ativo + compra BUY sintetica). PROBLEMA CONHECIDO (spec 002):\
+        \ assets nulo responde 400 (NPE). Falha da Brapi ao enriquecer um ativo tambem\
+        \ vira 400 (spec 008)."
+      operationId: createWallet
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletDTO"
+        required: true
+      responses:
+        "201":
+          description: "Carteira criada. Header Location aponta para /wallet/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+  /wallet/{walletId}/history/backfill:
+    post:
+      tags:
+      - Wallets
+      summary: Materializar snapshots diarios (backfill)
+      description: Grava em portfolio_snapshots os dias do periodo (upsert por carteira+data).
+        Repetir a chamada apenas atualiza os dias existentes (campo updated). Carteira
+        de outro usuario responde 403.
+      operationId: backfill
+      parameters:
+      - name: walletId
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Quantidade criada/atualizada e fotografia final dos dias.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioSnapshotBackfillDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/{id}/assets/merge:
+    post:
+      tags:
+      - Wallets
+      summary: Unificar tickers duplicados da carteira
+      description: Unifica os registros duplicados do mesmo ticker em uma posicao
+        so. mergedTickers vazio significa que a carteira ja estava consolidada. Carteira
+        de outro usuario responde 403.
+      operationId: mergeAssets
+      parameters:
+      - name: id
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Tickers que foram unificados.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetMergeResultDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users:
+    get:
+      tags:
+      - Users
+      summary: Listar usuarios (ADMIN)
+      description: "Exige papel ADMIN (regra GET /users/** no SecurityConfig). Como\
+        \ esta hoje: usuario autenticado SEM ADMIN recebe 401 (corpo vazio), nao 403,\
+        \ no servidor real: o 403 do Spring Security e encaminhado por sendError ao\
+        \ dispatch de /error, que roda como anonimo e cai no entry point 401. Nos\
+        \ testes com MockMvc (sem dispatch de /error) a mesma chamada aparece como\
+        \ 403."
+      operationId: getAll
+      responses:
+        "200":
+          description: Todos os usuarios.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+    post:
+      tags:
+      - Users
+      summary: Cadastrar usuario
+      description: "Rota publica (POST /users). A senha e gravada com BCrypt e nunca\
+        \ devolvida. E-mail duplicado responde 400 com {error} contendo a mensagem\
+        \ crua do banco (DataIntegrityViolation), nao um texto de validacao. O papel\
+        \ (role) nao e escolhido pelo cliente."
+      operationId: createUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserDTO"
+        required: true
+      responses:
+        "201":
+          description: "Usuario criado. Header Location aponta para /users/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+      security: []
+  /transactions:
+    get:
+      tags:
+      - Transactions
+      summary: Listar transacoes
+      description: "Sem assetId e sem walletId retorna TODAS as transacoes do usuario\
+        \ (listagem global), da mais recente para a mais antiga. assetId e walletId\
+        \ sao mutuamente exclusivos (juntos = 400). from/to sao inclusivos e comparam\
+        \ o dia da transacao; filtram so as linhas devolvidas, o realizedResult e\
+        \ sempre calculado sobre o ledger completo. from posterior a to responde 400."
+      operationId: getTransactions
+      parameters:
+      - name: assetId
+        in: query
+        description: Opcional. Filtra por ativo. Exclusivo com walletId.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: walletId
+        in: query
+        description: Opcional. Filtra por carteira. Exclusivo com assetId.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Transacoes (lista vazia se nao houver).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TransactionResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags:
+      - Transactions
+      summary: Registrar transacao
+      description: "Registra BUY ou SELL e recalcula a posicao pelo replay do ledger.\
+        \ transactionDate e um dia yyyy-MM-dd; nulo = hoje (C3, spec 005: o ADC envia\
+        \ ...T00:00:00.000Z e so funciona pela tolerancia do Jackson). Recusas de\
+        \ regra de negocio respondem 400 com {error, code}: SELL_BEFORE_PURCHASE,\
+        \ INSUFFICIENT_POSITION, FUTURE_TRANSACTION_DATE. Ativo de outro usuario responde\
+        \ 403."
+      operationId: createTransaction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionDTO"
+        required: true
+      responses:
+        "201":
+          description: "Transacao criada. Header Location aponta para /transactions/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dividends:
+    get:
+      tags:
+      - Dividends
+      summary: Listar proventos
+      description: Sem assetId e sem walletId retorna os proventos de TODAS as carteiras
+        do usuario. assetId e walletId juntos = 400. O filtro year (ano do paymentDate)
+        so vale com walletId ou sem filtro; com assetId e ignorado.
+      operationId: getReceipts
+      parameters:
+      - name: assetId
+        in: query
+        description: Opcional. Filtra por ativo. Exclusivo com walletId.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: walletId
+        in: query
+        description: Opcional. Filtra por carteira. Exclusivo com assetId.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: year
+        in: query
+        description: "Opcional. Ano do pagamento (ex.: 2025). Ignorado quando assetId\
+          \ e informado."
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: Proventos.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DividendReceiptResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags:
+      - Dividends
+      summary: Registrar provento manual
+      description: "Cria um provento de origem MANUAL. paymentDate e exDate sao java.util.Date\
+        \ serializados como date-time (C6, spec 005), diferente das demais datas da\
+        \ API. Ativo de outro usuario responde 403."
+      operationId: createManual
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DividendReceiptDTO"
+        required: true
+      responses:
+        "201":
+          description: "Provento criado. Header Location aponta para /dividends/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DividendReceiptResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dividends/sync/{assetId}:
+    post:
+      tags:
+      - Dividends
+      summary: Sincronizar proventos com a Brapi
+      description: "O parametro assetId aceita o id numerico do ativo OU o ticker\
+        \ (ex.: PETR4). Ticker presente em mais de uma carteira do usuario responde\
+        \ 400 (use o id). available=false significa que a Brapi nao expos os proventos\
+        \ (ex.: FII no plano gratuito): e aviso, nao erro. Ativo ou ticker inexistente\
+        \ responde 404."
+      operationId: syncFromBrapi
+      parameters:
+      - name: assetId
+        in: path
+        description: Id numerico do ativo ou ticker.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Resultado do sync.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DividendSyncResultDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /auth/login:
+    post:
+      tags:
+      - Auth
+      summary: Login
+      description: "Autentica por e-mail e senha e devolve o JWT e o usuario. Rota\
+        \ publica. Credenciais invalidas caem no handler de RuntimeException e respondem\
+        \ 400 com {error} (nao 401)."
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequestDTO"
+        required: true
+      responses:
+        "200":
+          description: Token JWT (expira em 24h) e dados do usuario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+      security: []
+  /assets:
+    get:
+      tags:
+      - Assets
+      summary: Listar ativos
+      description: "Sem walletId: ativos de todas as carteiras do usuario. Com walletId:\
+        \ so daquela carteira (403 se for de outro usuario; walletId nao numerico\
+        \ responde 400). A lista nao expoe preco vivo; para isso use o summary."
+      operationId: getAll_1
+      parameters:
+      - name: walletId
+        in: query
+        description: Opcional. Id da carteira; ausente = todas as carteiras do usuario.
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: Ativos.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags:
+      - Assets
+      summary: Criar ativo (abertura de posicao)
+      description: "Cria o ativo na carteira e enriquece nome/PE/EPS pela Brapi. Se\
+        \ o ticker JA EXISTE na carteira (comparacao sem diferenciar maiusculas),\
+        \ nenhum ativo novo e criado: quando unitPrice vem, soma uma compra BUY ao\
+        \ ativo existente (data = acquisitionDate ou hoje) e devolve o ATIVO EXISTENTE,\
+        \ com os agregados recalculados; sem unitPrice, devolve o ativo existente\
+        \ sem alteracao. Em ambos os casos o status e 201 com Location, igual a uma\
+        \ criacao. unitPrice e acquisitionDate descrevem a compra de abertura (BUY\
+        \ sintetica); sao opcionais (sem unitPrice o ativo nasce zerado). PROBLEMAS\
+        \ CONHECIDOS: falha da Brapi em getAssetData vira 400 (spec 008); walletId\
+        \ e String aqui (C10, spec 006); acquisitionDate espera yyyy-MM-dd (C3, spec\
+        \ 005). Carteira de outro usuario responde 403."
+      operationId: createAsset
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetCreateDTO"
+        required: true
+      responses:
+        "201":
+          description: "Ativo criado. Header Location aponta para /assets/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /assets/{assetId}/valuations:
+    get:
+      tags:
+      - Assets
+      summary: Historico de valuations do ativo
+      description: "Valuations gravados para o ativo, opcionalmente filtrados por\
+        \ metodo. Metodo invalido responde 400."
+      operationId: history
+      parameters:
+      - name: assetId
+        in: path
+        description: Id do ativo.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: method
+        in: query
+        description: "Opcional. GRAHAM, BAZIN ou DCF."
+        required: false
+        schema:
+          type: string
+          enum:
+          - GRAHAM
+          - BAZIN
+          - DCF
+      responses:
+        "200":
+          description: Valuations (lista vazia se nao houver).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ValuationResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags:
+      - Assets
+      summary: Calcular e gravar valuation
+      description: "Calcula o valor justo pelo metodo (GRAHAM, BAZIN ou DCF) e grava\
+        \ no historico. inputs sao opcionais por metodo: GRAHAM (priceEarnings, earningsPerShare;\
+        \ padrao do cadastro da Brapi), BAZIN (targetYield; padrao do servico), DCF\
+        \ (freeCashFlow obrigatorio; growthRate, discountRate, terminalGrowthRate,\
+        \ projectionYears). Dado insuficiente responde 400 com {error}. computedAt\
+        \ e java.util.Date (C6, spec 005). Ativo de outro usuario responde 403."
+      operationId: compute
+      parameters:
+      - name: assetId
+        in: path
+        description: Id do ativo.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValuationRequestDTO"
+        required: true
+      responses:
+        "201":
+          description: "Valuation gravado. Header Location aponta para /assets/{assetId}/valuations/{id}."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValuationResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/{walletId}/volatility:
+    get:
+      tags:
+      - Wallets
+      summary: Volatilidade historica por ativo de uma carteira
+      description: "Uma linha por ticker com posicao na janela. annualizedVolatility\
+        \ e FRACAO de 0 a 1 (C4, spec 006), diferente dos percentuais de 0 a 100;\
+        \ e historica, nao previsao. null = sem dado suficiente (ver observations),\
+        \ nunca zero. warnings declara preco sem ajuste e ticker sem historico. from\
+        \ posterior a to responde 400."
+      operationId: getVolatility
+      parameters:
+      - name: walletId
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Volatilidade por ativo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolatilityResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/{walletId}/summary:
+    get:
+      tags:
+      - Wallets
+      summary: Resumo vivo de uma carteira
+      description: "Totais e quebra por ativo com preco vivo. Ativos zerados (amount\
+        \ 0) ficam fora. Falha de cotacao de um ticker devolve o ativo com currentPrice\
+        \ nulo e warning=true (nao derruba a requisicao); PROBLEMA CONHECIDO (spec\
+        \ 008): falha em getAssetData vira 400. Carteira de outro usuario responde\
+        \ 403."
+      operationId: getWalletSummary
+      parameters:
+      - name: walletId
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Resumo da carteira.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioSummaryDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/{walletId}/history:
+    get:
+      tags:
+      - Wallets
+      summary: Historico patrimonial de uma carteira
+      description: "Reconstroi a serie diaria do ledger ate a data de corte, multiplicada\
+        \ pelo fechamento historico da Brapi, na hora (sem depender do job). Dias\
+        \ antes da primeira transacao nao existem na serie. Ponto com complete=false\
+        \ tem totalValue parcial (falta preco de algum ticker, listado em missingTickers);\
+        \ o que nao foi reconstruido vem em warnings. from posterior a to responde\
+        \ 400."
+      operationId: getHistory
+      parameters:
+      - name: walletId
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Serie historica.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioHistoryResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/{walletId}/history/snapshots:
+    get:
+      tags:
+      - Wallets
+      summary: Listar snapshots persistidos
+      description: Le as fotografias diarias ja gravadas (pelo job diario ou pelo
+        backfill). Nao reconstroi nada.
+      operationId: getSnapshots
+      parameters:
+      - name: walletId
+        in: path
+        description: Id da carteira.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Snapshots (lista vazia se nao houver).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PortfolioSnapshotResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/volatility:
+    get:
+      tags:
+      - Wallets
+      summary: Volatilidade historica consolidada
+      description: "Sem walletId, todas as carteiras do usuario (tickers deduplicados;\
+        \ walletId na resposta e nulo); com walletId, equivale a GET /wallet/{walletId}/volatility."
+      operationId: getVolatilityForUser
+      parameters:
+      - name: walletId
+        in: query
+        description: Opcional. Id da carteira; ausente = todas as carteiras do usuario.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Volatilidade por ativo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolatilityResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/summary:
+    get:
+      tags:
+      - Wallets
+      summary: Resumo vivo de todas as carteiras
+      description: "Soma de todas as carteiras do usuario com precos vivos da Brapi.\
+        \ P&L oficial (C2): totalProfitLoss, calculado so sobre pricedInvested. Preco\
+        \ ausente = posicao listada em missingPrices e complete=false, nunca zero.\
+        \ PROBLEMA CONHECIDO (spec 008): falha da Brapi em getAssetData vira 400."
+      operationId: getConsolidatedSummary
+      responses:
+        "200":
+          description: Totais consolidados.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioTotalsDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+  /wallet/history:
+    get:
+      tags:
+      - Wallets
+      summary: Historico patrimonial consolidado
+      description: "Sem walletId, serie consolidada de todas as carteiras do usuario\
+        \ (walletId na resposta e nulo); com walletId, equivale a GET /wallet/{walletId}/history.\
+        \ Mesmas regras de complete/missingTickers/warnings."
+      operationId: getHistoryForUser
+      parameters:
+      - name: walletId
+        in: query
+        description: Opcional. Id da carteira; ausente = todas as carteiras do usuario.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Serie historica.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioHistoryResponseDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /transactions/results:
+    get:
+      tags:
+      - Transactions
+      summary: Resultado realizado das vendas
+      description: "Resultado realizado por replay do ledger, com filtro opcional\
+        \ por carteira e periodo. O recorte por data vale para as vendas listadas,\
+        \ mas a compensacao de prejuizo considera o historico anterior a from (openingLossBalance).\
+        \ Informa totalProceeds, nao decide isencao nem calcula imposto. from posterior\
+        \ a to responde 400. Sem walletId = todas as carteiras do usuario."
+      operationId: getRealizedResults
+      parameters:
+      - name: walletId
+        in: query
+        description: Opcional. Id da carteira; ausente = todas as carteiras do usuario.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: from
+        in: query
+        description: "Opcional. Inicio do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: "Opcional. Fim do periodo, inclusivo, formato yyyy-MM-dd."
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        "200":
+          description: Resultado realizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealizedResultsDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dividends/summary:
+    get:
+      tags:
+      - Dividends
+      summary: Resumo de proventos por ano
+      description: Total recebido por ano (ano do paymentDate) e total geral. Sem
+        walletId = todas as carteiras do usuario.
+      operationId: getSummary
+      parameters:
+      - name: walletId
+        in: query
+        description: Opcional. Id da carteira; ausente = todas as carteiras do usuario.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Resumo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DividendSummaryDTO"
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /dividends/{id}:
+    delete:
+      tags:
+      - Dividends
+      summary: Excluir provento manual
+      description: So proventos MANUAL podem ser excluidos; os de origem BRAPI respondem
+        400 (sincronize de novo para corrigir). Provento de outro usuario responde
+        403.
+      operationId: deleteManual
+      parameters:
+      - name: id
+        in: path
+        description: Id do provento.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "204":
+          description: Excluido. Sem corpo.
+        "400":
+          description: "Requisicao recusada. Tres formatos possiveis: validacao do\
+            \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
+            \ {error, code} (BusinessRuleErrorResponse) ou erro generico {error} (ErrorResponse).\
+            \ Qualquer RuntimeException nao tratada tambem vira 400."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: "#/components/schemas/ValidationErrorResponse"
+                - $ref: "#/components/schemas/BusinessRuleErrorResponse"
+                - $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Token JWT ausente, invalido ou expirado. Corpo vazio."
+        "403":
+          description: Recurso existe mas pertence a outro usuario (AccessDeniedException
+            de ownership).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Recurso nao encontrado (EntityNotFoundException).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    AssetCreateDTO:
+      type: object
+      description: "Abertura de posicao: cria o ativo e, se unitPrice vier, uma compra\
+        \ BUY sintetica."
+      properties:
+        ticker:
+          type: string
+          description: "Ticker na B3 (ex.: PETR4). Nome e dados de mercado vem da\
+            \ Brapi."
+          minLength: 1
+        walletId:
+          type: string
+          description: "Id da carteira, como STRING numerica. PROBLEMA CONHECIDO C10\
+            \ (spec 006): e Long no resto da API."
+          minLength: 1
+        amount:
+          type: integer
+          format: int32
+          description: "Quantidade de acoes, inteiro maior que zero."
+        unitPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ unitario da compra de abertura, maior que zero. null = ativo criado\
+            \ zerado (compras sao registradas depois)."
+        acquisitionDate:
+          type: string
+          format: date
+          description: "Dia da compra de abertura, yyyy-MM-dd (LocalDate). null =\
+            \ hoje. PROBLEMA CONHECIDO C3 (spec 005): o ADC envia ...T00:00:00.000Z\
+            \ e so funciona pela tolerancia do Jackson."
+      required:
+      - amount
+      - ticker
+      - walletId
+    WalletDTO:
+      type: object
+      description: Criacao/atualizacao de carteira. O dono vem do token JWT.
+      properties:
+        name:
+          type: string
+          description: Nome da carteira.
+        description:
+          type: string
+          description: Descricao livre.
+        assets:
+          type: array
+          description: "Posicoes de abertura: cada item vira um ativo mais uma compra\
+            \ BUY sintetica. PROBLEMA CONHECIDO (spec 002): nulo responde 400 (NPE)\
+            \ no POST; envie lista vazia."
+          items:
+            $ref: "#/components/schemas/AssetCreateDTO"
+    AssetResponseDTO:
+      type: object
+      description: Ativo (posicao) cadastrado. Nao traz cotacao viva; use o summary
+        da carteira.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        name:
+          type: string
+          description: Nome vindo da Brapi.
+        amount:
+          type: integer
+          format: int32
+          description: "Quantidade em carteira, derivada do ledger."
+        currentValue:
+          type: number
+          format: double
+          description: "PROBLEMA CONHECIDO C1 (spec 004): preco UNITARIO gravado no\
+            \ cadastro e nunca atualizado; nao e cotacao atual. Em AssetSummaryDTO,\
+            \ currentValue e o valor TOTAL da posicao. Valor em BRL (implicito), double\
+            \ sem arredondamento. "
+        mediumPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ medio ponderado por acao, derivado do ledger."
+        fairValue:
+          type: number
+          format: double
+          description: "PROBLEMA CONHECIDO C5 (spec 004): Graham automatico, sqrt(22.5*PE*EPS),\
+            \ calculado so no cadastro e na troca de ticker; nao reflete valuations\
+            \ posteriores. Valor em BRL (implicito), double sem arredondamento. null\
+            \ = sem PE/EPS."
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ total da posicao, derivado do ledger."
+    WalletResponseDTO:
+      type: object
+      description: Carteira com seus ativos.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        name:
+          type: string
+          description: Nome.
+        description:
+          type: string
+          description: Descricao livre.
+        totalInvestedValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Soma\
+            \ de totalInvested dos ativos, derivada na leitura."
+        assets:
+          type: array
+          description: "Ativos da carteira (AssetResponseDTO.currentValue tem semantica\
+            \ propria, ver C1)."
+          items:
+            $ref: "#/components/schemas/AssetResponseDTO"
+    ValidationErrorResponse:
+      type: object
+      additionalProperties:
+        type: string
+        description: "Erro de validacao do corpo (HTTP 400): objeto cujas chaves sao\
+          \ os nomes dos campos invalidos e cujos valores sao a mensagem de validacao.\
+          \ Exemplo: {\"email\": \"Invalid e-mail...\", \"password\": \"Password must\
+          \ contain at least 8 characters\"}."
+      description: "Erro de validacao do corpo (HTTP 400): objeto cujas chaves sao\
+        \ os nomes dos campos invalidos e cujos valores sao a mensagem de validacao.\
+        \ Exemplo: {\"email\": \"Invalid e-mail...\", \"password\": \"Password must\
+        \ contain at least 8 characters\"}."
+      properties:
+        empty:
+          type: boolean
+    BusinessRuleErrorResponse:
+      type: object
+      description: "Recusa de regra de negocio (HTTP 400). O `code` e o contrato estavel;\
+        \ o `error` e texto de tela e pode mudar. Emitidos pelo replay do ledger (AssetPositionCalculator):\
+        \ registro, edicao e exclusao de transacoes e abertura de posicao."
+      properties:
+        error:
+          type: string
+          description: "Mensagem para exibir ao usuario, em texto livre."
+        code:
+          type: string
+          description: "Codigo estavel da regra violada. SELL_BEFORE_PURCHASE: venda\
+            \ com data anterior a primeira compra do ativo. INSUFFICIENT_POSITION:\
+            \ venda maior que a posicao existente na data informada. FUTURE_TRANSACTION_DATE:\
+            \ data da transacao no futuro."
+          enum:
+          - SELL_BEFORE_PURCHASE
+          - INSUFFICIENT_POSITION
+          - FUTURE_TRANSACTION_DATE
+    ErrorResponse:
+      type: object
+      description: "Erro generico: IllegalArgumentException, EntityNotFoundException\
+        \ (404), AccessDeniedException de ownership (403), ResponseStatusException\
+        \ e qualquer RuntimeException nao tratada (400). O texto e livre, nao e contrato\
+        \ estavel e pode conter mensagem crua de excecao (ex.: violacao de unicidade\
+        \ do banco em e-mail duplicado)."
+      properties:
+        error:
+          type: string
+          description: Mensagem de erro em texto livre.
+          example: "Wallet not found with id: 99"
+    UserDTO:
+      type: object
+      description: Cadastro/atualizacao de usuario.
+      properties:
+        email:
+          type: string
+          format: email
+          description: "E-mail unico, usado como login."
+          minLength: 1
+        password:
+          type: string
+          description: "Senha, minimo 8 caracteres. Nunca devolvida."
+          maxLength: 2147483647
+          minLength: 8
+        name:
+          type: string
+          description: Nome de exibicao.
+      required:
+      - email
+      - password
+    UserResponseDTO:
+      type: object
+      description: Usuario (sem senha).
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id do usuario.
+        email:
+          type: string
+          description: E-mail.
+        name:
+          type: string
+          description: Nome de exibicao.
+        role:
+          type: string
+          description: "Papel: USER ou ADMIN."
+    TransactionDTO:
+      type: object
+      description: Transacao enviada pelo cliente.
+      properties:
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        amount:
+          type: integer
+          format: int32
+          description: "Quantidade, maior que zero."
+        unitPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ unitario, maior que zero."
+        type:
+          type: string
+          description: BUY ou SELL.
+          enum:
+          - SELL
+          - BUY
+        transactionDate:
+          type: string
+          format: date
+          description: "Dia da negociacao, yyyy-MM-dd (LocalDate), nao instante. null\
+            \ = hoje. Data futura responde 400 (FUTURE_TRANSACTION_DATE). PROBLEMA\
+            \ CONHECIDO C3 (spec 005): o ADC envia ...T00:00:00.000Z e so funciona\
+            \ pela tolerancia do Jackson."
+      required:
+      - amount
+      - assetId
+      - type
+      - unitPrice
+    TransactionResponseDTO:
+      type: object
+      description: Transacao exposta ao cliente.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id da transacao.
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker do ativo.
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        walletName:
+          type: string
+          description: Nome da carteira.
+        amount:
+          type: integer
+          format: int32
+          description: Quantidade.
+        unitPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ unitario."
+        type:
+          type: string
+          description: BUY ou SELL.
+          enum:
+          - SELL
+          - BUY
+        transactionDate:
+          type: string
+          format: date
+          description: "Dia da negociacao, yyyy-MM-dd (LocalDate); sem fuso."
+        realizedResult:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Resultado\
+            \ realizado no replay do ativo ate esta venda (nao e o preco medio atual).\
+            \ null em compras."
+    AssetUpdateDTO:
+      type: object
+      description: "Edicao de ativo: so o ticker. Qualquer outro campo no corpo responde\
+        \ 400."
+      properties:
+        ticker:
+          type: string
+          description: "Novo ticker. Nome e fairValue (Graham, C5) sao recalculados\
+            \ pela Brapi."
+          minLength: 1
+      required:
+      - ticker
+    PortfolioSnapshotBackfillDTO:
+      type: object
+      description: Resultado do backfill de snapshots.
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        from:
+          type: string
+          format: date
+          description: Inicio (yyyy-MM-dd).
+        to:
+          type: string
+          format: date
+          description: Fim (yyyy-MM-dd).
+        created:
+          type: integer
+          format: int32
+          description: Dias criados.
+        updated:
+          type: integer
+          format: int32
+          description: Dias existentes atualizados (upsert por carteira+data).
+        snapshots:
+          type: array
+          description: Fotografia final de cada dia.
+          items:
+            $ref: "#/components/schemas/PortfolioSnapshotResponseDTO"
+    PortfolioSnapshotResponseDTO:
+      type: object
+      description: Fotografia diaria persistida da carteira.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id do snapshot.
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        snapshotDate:
+          type: string
+          format: date
+          description: Dia (yyyy-MM-dd).
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ acumulado."
+        totalValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ de mercado; parcial quando complete=false."
+        complete:
+          type: boolean
+          description: false = totalValue parcial.
+        missingTickers:
+          type: array
+          description: Tickers sem preco no dia.
+          items:
+            type: string
+    AssetMergeResultDTO:
+      type: object
+      description: Resultado da unificacao de tickers duplicados.
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        mergedTickers:
+          type: array
+          description: Tickers que tinham mais de um registro e foram unificados.
+            Vazio = carteira ja consolidada.
+          items:
+            type: string
+    DividendReceiptDTO:
+      type: object
+      description: Provento manual enviado pelo cliente.
+      properties:
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        rate:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ por acao, maior que zero."
+        paymentDate:
+          type: string
+          format: date-time
+          description: "Data de pagamento. java.util.Date serializado como date-time\
+            \ (C6, spec 005), diferente das demais datas (LocalDate)."
+        exDate:
+          type: string
+          format: date-time
+          description: "Data ex. java.util.Date serializado como date-time (C6, spec\
+            \ 005). null = nao informada."
+        label:
+          type: string
+          description: "Rotulo livre (ex.: JCP, Dividendo)."
+      required:
+      - assetId
+      - paymentDate
+      - rate
+    DividendReceiptResponseDTO:
+      type: object
+      description: Provento recebido.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id do provento.
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        rate:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ por acao."
+        paymentDate:
+          type: string
+          format: date-time
+          description: "Data de pagamento. java.util.Date serializado como date-time\
+            \ (C6, spec 005)."
+        exDate:
+          type: string
+          format: date-time
+          description: "Data ex. java.util.Date serializado como date-time (C6, spec\
+            \ 005)."
+        label:
+          type: string
+          description: Rotulo livre.
+        source:
+          type: string
+          description: BRAPI (sincronizado) ou MANUAL (so estes podem ser excluidos).
+          enum:
+          - BRAPI
+          - MANUAL
+    DividendSyncResultDTO:
+      type: object
+      description: Resultado de um sync com a Brapi.
+      properties:
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        available:
+          type: boolean
+          description: "false = a Brapi nao expos os proventos (ex.: FII no plano\
+            \ gratuito, responde 403). E aviso, nao erro."
+        stored:
+          type: integer
+          format: int32
+          description: Proventos gravados.
+        skipped:
+          type: integer
+          format: int32
+          description: Proventos ignorados (ja existentes).
+    LoginRequestDTO:
+      type: object
+      description: Credenciais de login.
+      properties:
+        email:
+          type: string
+          description: E-mail cadastrado.
+        password:
+          type: string
+          description: Senha em texto puro.
+    LoginResponseDTO:
+      type: object
+      description: Resposta do login.
+      properties:
+        token:
+          type: string
+          description: "JWT para o header Authorization: Bearer. Expira em 24h (app.jwt.expiration)."
+        user:
+          $ref: "#/components/schemas/UserResponseDTO"
+          description: Dados do usuario autenticado.
+    ValuationRequestDTO:
+      type: object
+      description: Pedido de valuation.
+      properties:
+        method:
+          type: string
+          description: "GRAHAM, BAZIN ou DCF."
+          enum:
+          - GRAHAM
+          - BAZIN
+          - DCF
+        inputs:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+          description: "Parametros opcionais por metodo. GRAHAM: priceEarnings, earningsPerShare.\
+            \ BAZIN: targetYield (fracao). DCF: freeCashFlow (obrigatorio), growthRate,\
+            \ discountRate, terminalGrowthRate, projectionYears. Ausentes usam o padrao\
+            \ do servico."
+      required:
+      - method
+    ValuationResponseDTO:
+      type: object
+      description: Valuation gravado.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Id do valuation.
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        method:
+          type: string
+          description: "GRAHAM, BAZIN ou DCF."
+          enum:
+          - GRAHAM
+          - BAZIN
+          - DCF
+        result:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ justo por acao."
+        low:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Limite\
+            \ inferior da faixa. null = metodo sem faixa."
+        high:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Limite\
+            \ superior da faixa. null = metodo sem faixa."
+        inputs:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+          description: "Parametros efetivamente usados no calculo, ja com os padroes\
+            \ aplicados."
+        formula:
+          type: string
+          description: Formula/explicacao textual do calculo.
+        computedAt:
+          type: string
+          format: date-time
+          description: "Momento do calculo. java.util.Date serializado como date-time\
+            \ (C6, spec 005)."
+    AssetVolatilityDTO:
+      type: object
+      description: Volatilidade historica de um ticker.
+      properties:
+        ticker:
+          type: string
+          description: Ticker.
+        annualizedVolatility:
+          type: number
+          format: double
+          description: "Desvio-padrao dos retornos diarios logaritmicos x sqrt(252).\
+            \ FRACAO de 0 a 1 (ex.: 0.25 = 25%); PROBLEMA CONHECIDO C4 (spec 006):\
+            \ os demais percentuais da API vao de 0 a 100. Historica, nao previsao.\
+            \ null = dado insuficiente (ver observations), nunca zero."
+        observations:
+          type: integer
+          format: int32
+          description: Numero de pregoes usados.
+        firstClose:
+          type: string
+          format: date
+          description: Primeiro fechamento usado (yyyy-MM-dd).
+        lastClose:
+          type: string
+          format: date
+          description: Ultimo fechamento usado (yyyy-MM-dd).
+    VolatilityResponseDTO:
+      type: object
+      description: "Volatilidade historica por ticker, na janela consultada."
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira. null = todas as carteiras do usuario.
+        from:
+          type: string
+          format: date
+          description: Inicio da janela (yyyy-MM-dd).
+        to:
+          type: string
+          format: date
+          description: Fim da janela (yyyy-MM-dd).
+        assets:
+          type: array
+          description: Uma linha por ticker com posicao na janela.
+          items:
+            $ref: "#/components/schemas/AssetVolatilityDTO"
+        warnings:
+          type: array
+          description: "O que nao pode ser calculado com integridade (preco sem ajuste,\
+            \ ticker sem historico). Nunca vira zero."
+          items:
+            type: string
+    AssetSummaryDTO:
+      type: object
+      properties:
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        name:
+          type: string
+          description: Nome.
+        amount:
+          type: integer
+          format: int32
+          description: Quantidade.
+        mediumPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ medio por acao."
+        currentPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Cotacao\
+            \ viva por acao. null = sem dado (preco ausente), nunca zero. Moeda e\
+            \ momento da cotacao nao sao expostos (C7, spec 006)."
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ total da posicao do ativo."
+        currentValue:
+          type: number
+          format: double
+          description: "PROBLEMA CONHECIDO C1 (spec 004): aqui e o valor TOTAL da\
+            \ posicao (amount * currentPrice); em AssetResponseDTO e o preco unitario\
+            \ do cadastro. Valor em BRL (implicito), double sem arredondamento. null\
+            \ = sem preco."
+        profitLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. currentValue\
+            \ - totalInvested. null = sem preco."
+        profitLossPercentage:
+          type: number
+          format: double
+          description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). null = sem preco\
+            \ ou custo zero."
+        allocationPercentage:
+          type: number
+          format: double
+          description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). Peso do ativo no\
+            \ valor atual da carteira. Vale 0 (nao null) quando o ativo esta sem preco\
+            \ ou o valor total e zero."
+        warning:
+          type: boolean
+          description: true quando a cotacao falhou para este ativo.
+        warningMessage:
+          type: string
+          description: Motivo do aviso. null quando warning=false.
+    PortfolioSummaryDTO:
+      type: object
+      description: Resumo vivo de uma carteira com cotacoes da Brapi.
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        walletName:
+          type: string
+          description: Nome.
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ total das posicoes."
+        totalCurrentValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ de mercado so das posicoes COM preco; posicao sem preco (warning=true)\
+            \ nao entra aqui, mas o custo dela entra em totalInvested."
+        totalProfitLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. totalCurrentValue\
+            \ - totalInvested. PROBLEMA CONHECIDO (C2, spec 004): inclui no custo\
+            \ as posicoes sem preco, o que mostra prejuizo falso quando uma cotacao\
+            \ falha; o P&L oficial e PortfolioTotalsDTO.totalProfitLoss."
+        totalProfitLossPercentage:
+          type: number
+          format: double
+          description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). totalProfitLoss\
+            \ sobre totalInvested; 0 quando totalInvested e zero."
+        assets:
+          type: array
+          description: Quebra por ativo.
+          items:
+            $ref: "#/components/schemas/AssetSummaryDTO"
+    PortfolioHistoryResponseDTO:
+      type: object
+      description: Serie historica do patrimonio reconstruida do ledger.
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira. null = todas as carteiras do usuario.
+        from:
+          type: string
+          format: date
+          description: Inicio efetivo (yyyy-MM-dd).
+        to:
+          type: string
+          format: date
+          description: Fim efetivo (yyyy-MM-dd).
+        points:
+          type: array
+          description: Um ponto por dia.
+          items:
+            $ref: "#/components/schemas/PortfolioPointDTO"
+        warnings:
+          type: array
+          description: "O que nao foi reconstruido (ex.: historico indisponivel na\
+            \ fonte). Nunca trunca em silencio."
+          items:
+            type: string
+    PortfolioPointDTO:
+      type: object
+      description: Um ponto da serie historica.
+      properties:
+        date:
+          type: string
+          format: date
+          description: Dia (yyyy-MM-dd).
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ acumulado ate o dia."
+        totalValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ de mercado no dia; parcial quando complete=false."
+        complete:
+          type: boolean
+          description: false = algum ativo com posicao nao tinha preco de fechamento
+            (totalValue parcial).
+        missingTickers:
+          type: array
+          description: Tickers sem preco no dia.
+          items:
+            type: string
+    MissingPriceDTO:
+      type: object
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        walletName:
+          type: string
+          description: Nome da carteira.
+        ticker:
+          type: string
+          description: Ticker sem preco.
+    PortfolioTotalsDTO:
+      type: object
+      description: "Resumo vivo de todas as carteiras do usuario. Fonte oficial do\
+        \ P&L (C2, spec 004): totalProfitLoss, calculado so sobre pricedInvested."
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: "Instante da geracao (Instant, ISO-8601 UTC)."
+        walletCount:
+          type: integer
+          format: int32
+          description: Numero de carteiras.
+        assetCount:
+          type: integer
+          format: int32
+          description: Numero de ativos.
+        pricedAssetCount:
+          type: integer
+          format: int32
+          description: Ativos que tiveram preco.
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ total de todas as posicoes."
+        pricedInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ apenas das posicoes que tiveram preco; base do P&L."
+        totalCurrentValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ de mercado apenas das posicoes com preco."
+        totalProfitLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. P&L oficial:\
+            \ totalCurrentValue - pricedInvested."
+        totalProfitLossPercentage:
+          type: number
+          format: double
+          description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). totalProfitLoss\
+            \ sobre pricedInvested. null = pricedInvested zero (nenhum ativo com preco)."
+        complete:
+          type: boolean
+          description: false quando algum ativo ficou sem preco (ver missingPrices).
+        missingPrices:
+          type: array
+          description: "Posicoes fora do valor atual por falta de preco. Preco ausente\
+            \ = sem dado, nunca zero."
+          items:
+            $ref: "#/components/schemas/MissingPriceDTO"
+        wallets:
+          type: array
+          description: Mesmos totais por carteira.
+          items:
+            $ref: "#/components/schemas/WalletTotalsDTO"
+    WalletTotalsDTO:
+      type: object
+      properties:
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        walletName:
+          type: string
+          description: Nome da carteira.
+        assetCount:
+          type: integer
+          format: int32
+          description: Numero de ativos.
+        pricedAssetCount:
+          type: integer
+          format: int32
+          description: Ativos que tiveram preco.
+        totalInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ total de todas as posicoes."
+        pricedInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ apenas das posicoes que tiveram preco; base do P&L."
+        totalCurrentValue:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ de mercado apenas das posicoes com preco."
+        totalProfitLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. P&L oficial:\
+            \ totalCurrentValue - pricedInvested."
+        totalProfitLossPercentage:
+          type: number
+          format: double
+          description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). totalProfitLoss\
+            \ sobre pricedInvested. null = pricedInvested zero (nenhum ativo com preco)."
+        complete:
+          type: boolean
+          description: false quando algum ativo ficou sem preco (ver missingPrices).
+    RealizedResultsDTO:
+      type: object
+      description: "Resultado realizado das vendas no periodo, por replay do ledger.\
+        \ Gerencial: nao decide isencao nem calcula imposto."
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: "Instante da geracao (Instant, ISO-8601 UTC)."
+        walletId:
+          type: integer
+          format: int64
+          description: Carteira filtrada. null = todas as carteiras do usuario.
+        from:
+          type: string
+          format: date
+          description: Inicio do periodo (yyyy-MM-dd). null = sem limite.
+        to:
+          type: string
+          format: date
+          description: Fim do periodo (yyyy-MM-dd). null = sem limite.
+        saleCount:
+          type: integer
+          format: int32
+          description: Numero de vendas no periodo.
+        totalProceeds:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Volume\
+            \ vendido (amount * unitPrice). Base da isencao mensal, que este endpoint\
+            \ nao decide."
+        totalProfit:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Soma\
+            \ dos resultados positivos."
+        totalLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Soma\
+            \ dos prejuizos em MODULO (valor positivo ou zero)."
+        netResult:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. totalProfit\
+            \ - totalLoss."
+        openingLossBalance:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Saldo\
+            \ de prejuizo vindo de vendas anteriores a from."
+        compensatedLoss:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Prejuizo\
+            \ abatido dos lucros, cronologicamente."
+        taxableResult:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Resultado\
+            \ apos compensacao (gerencial)."
+        lossCarryForward:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Prejuizo\
+            \ remanescente a compensar."
+        sales:
+          type: array
+          description: Vendas do periodo com o resultado de cada uma.
+          items:
+            $ref: "#/components/schemas/RealizedSaleDTO"
+    RealizedSaleDTO:
+      type: object
+      description: Venda com o resultado realizado no momento em que foi lancada.
+      properties:
+        transactionId:
+          type: integer
+          format: int64
+          description: Id da transacao SELL.
+        assetId:
+          type: integer
+          format: int64
+          description: Id do ativo.
+        ticker:
+          type: string
+          description: Ticker.
+        walletId:
+          type: integer
+          format: int64
+          description: Id da carteira.
+        walletName:
+          type: string
+          description: Nome da carteira.
+        date:
+          type: string
+          format: date
+          description: Dia da venda (yyyy-MM-dd).
+        amount:
+          type: integer
+          format: int32
+          description: Quantidade vendida.
+        unitPrice:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Preco\
+            \ unitario da venda."
+        averageCost:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ medio naquele ponto do replay (nao o preco medio atual)."
+        proceeds:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ recebido: amount * unitPrice."
+        costBasis:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ baixado: amount * averageCost."
+        result:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. proceeds\
+            \ - costBasis."
+    DividendSummaryDTO:
+      type: object
+      description: Proventos agregados por ano de pagamento.
+      properties:
+        byYear:
+          type: array
+          description: Total por ano.
+          items:
+            $ref: "#/components/schemas/YearlyDividendDTO"
+        total:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Total\
+            \ geral."
+    YearlyDividendDTO:
+      type: object
+      properties:
+        year:
+          type: integer
+          format: int32
+          description: Ano do paymentDate.
+        total:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Total\
+            \ geral."
+        receipts:
+          type: integer
+          format: int64
+          description: Quantidade de proventos no ano.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      description: Token retornado por POST /auth/login.
+      scheme: bearer
+      bearerFormat: JWT
