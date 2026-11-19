@@ -25,6 +25,7 @@
 - Ângulo: um app de investimentos precisa de cálculo confiável, boa interface e dados de fundamentos → três serviços com papéis separados (Consolidator em Java/Spring Boot, Visualizer em Angular, ADC em Python) → o que cada um faz hoje.
 - Destaque técnico: um dono para a API e para os cálculos (Consolidator), com interface e coleta de dados como consumidores.
 - Limite honesto: ADC ainda em construção; o contrato formal (OpenAPI) ainda vem. Se a spec 001 estiver fechada na publicação, citar como entregue.
+- Imagem: diagrama pronto em `docs/story/diagrams/` (`mywallet-arquitetura-v2.png` para publicar, `mywallet-arquitetura-v2.svg` e `mywallet-arquitetura.excalidraw` como fontes). O autor não consegue abrir `.excalidraw` pelo seletor de arquivos; funciona renomear para `.json` ou colar o conteúdo no Excalidraw. Descrição original (ideia do autor, Excalidraw): Três caixas (Visualizer, Consolidator, ADC), setas de quem consome quem, Brapi e Fundamentus como fontes externas, bancos de dados separados. Sem dados reais.
 - Aqui entra design e padrões, em nível de visão geral. Detalhes de cada decisão ficam para os posts seguintes.
 
 ### 3. Do registro de operações ao patrimônio completo
@@ -37,7 +38,7 @@
 ### 4. Valuation e risco ao lado da posição
 - Status: ideia
 - Marcos: 2026-10-06 (Graham, Bazin, DCF), 2026-10-07 a 2026-10-10 (telas de análise, DY, valor justo por método), 2026-10-07 (histórico e snapshots), 2026-11-12 (volatilidade e evolução)
-- Ângulo: valuation e risco em planilhas separadas → tudo no mesmo lugar → o app calcula por método e mostra retorno, valuation, proventos e volatilidade. Gordon, TIR e rentabilidade real citados como suportados (decisão do autor). Deixar claro que o app organiza e analisa, não recomenda.
+- Ângulo: valuation e risco em planilhas separadas → tudo no mesmo lugar → o app calcula por método e mostra retorno, valuation, proventos e volatilidade. Métodos citados: DCF, Gordon, Bazin e Graham (o autor escolhe o mais viável por ativo). TIR e rentabilidade real só se o autor voltar a citá-los. Deixar claro que o app organiza e analisa, não recomenda.
 - Destaque técnico: métodos de valuation intercambiáveis por usuário.
 - Limite honesto: revisar antes de rascunhar os limites citados na auditoria (ex.: valor justo do cadastro que envelhece).
 

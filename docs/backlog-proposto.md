@@ -236,6 +236,12 @@ Ordem sugerida, em ondas. Dentro de uma onda, as specs podem rodar em paralelo.
 - **Prioridade:** baixa. É expansão de escopo. Nada atual depende disso.
 
 ## Achados que não viraram spec
+- **Comentários de código citando planos arquivados (spec 003, 2026-11-18).** A 003 não podia alterar código, então sobraram estas referências:
+  - Consolidator, para `BACKEND_ROADMAP.md`: `AssetCreateDTO.java:15`, `AssetUpdateDTO.java:12`, `WalletDTO.java:11` e `Wallet.java:37`.
+  - Visualizer, para `E2E_Auth_Fixes.md`: `asset-form.ts:255` e `wallet.service.ts:53`.
+  - ADC, "Fase 10": `db/models.py:225`.
+
+  Correção: trocar pelos ADRs do hub, num card avulso por serviço ou junto da próxima spec que mexer nesses arquivos.
 - **H2 do dev perde as tabelas quando fica parado (2026-11-18).** `application.properties` usa `jdbc:h2:mem:testdb` sem `DB_CLOSE_DELAY=-1`. Quando o pool do Hikari fecha todas as conexões (`maxLifetime` de 30 min), o H2 descarta o banco e as requisições seguintes dão "Table USERS not found". Correção de uma linha no Consolidator: card avulso. Enquanto isso, suba o dev com `SPRING_DATASOURCE_URL="jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1"`.
 - **`PROMPT_NOVA_SESSAO.txt`:** já excluído.
 - **Rotas não consumidas** (`GET/PUT/DELETE /users*`, `backfill`): ficam só documentadas na 001. A 009 decide se o front passa a usar `GET /users`.

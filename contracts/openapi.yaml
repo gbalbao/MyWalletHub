@@ -8,15 +8,15 @@ info:
 
     ## Autenticacao
     - Publicas: `/auth/**` e `POST /users`. Todo o resto exige `Authorization: Bearer <jwt>` (token de `POST /auth/login`).
-    - `GET /users` e `GET /users/{id}` exigem papel ADMIN (`GET /users/**`); sem ADMIN a resposta e 401 (corpo vazio), nao 403.
-    - Sem token valido: 401 (corpo vazio). Recurso de outro usuario: 403 com `{error}`. Nao encontrado: 404 com `{error}`.
+    - `GET`, `PUT` e `DELETE` em `/users/**` exigem papel ADMIN; sem ADMIN a resposta e 403 com `{error}`.
+    - Sem token valido: 401 (corpo vazio). Recurso de outro usuario: 403 com `{error}`. Nao encontrado: 404 com `{error}`. Rota inexistente, metodo nao suportado e content-type nao suportado respondem 404, 405 e 415 com o status real.
 
     ## Convencoes
     - **Valores monetarios**: BRL implicito, `double` sem arredondamento.
     - **Percentuais**: de 0 a 100 (`profitLossPercentage`, `allocationPercentage`, `totalProfitLossPercentage`). Excecao: `annualizedVolatility` e fracao de 0 a 1.
     - **Datas**: `LocalDate` (`yyyy-MM-dd`) em transacoes, historico, snapshots e volatilidade; `java.util.Date` (date-time) em `computedAt`, `paymentDate` e `exDate`; `Instant` (date-time UTC) em `generatedAt`.
     - **null**: preco ou valor ausente significa "sem dado", nunca zero.
-    - **Erros**: tres formatos. Validacao `{campo: mensagem}`; generico `{error}`; regra de negocio `{error, code}` com `code` em SELL_BEFORE_PURCHASE, INSUFFICIENT_POSITION, FUTURE_TRANSACTION_DATE.
+    - **Erros**: tres formatos. Validacao `{campo: mensagem}`; generico `{error}`; regra de negocio `{error, code}` com `code` em SELL_BEFORE_PURCHASE, INSUFFICIENT_POSITION, FUTURE_TRANSACTION_DATE (400) e EMAIL_ALREADY_EXISTS, WALLET_HAS_ASSETS, CANNOT_DELETE_SELF (409). Login invalido responde 401 `{error}`.
 
     ## Problemas conhecidos
     | ID | Problema como esta hoje | Spec que corrige |
@@ -29,12 +29,8 @@ info:
     | C4 | Volatilidade em fracao (0 a 1); os demais percentuais em 0 a 100 | 006 |
     | C7 | Moeda e momento da cotacao nao sao expostos | 006 |
     | C10 | `walletId` e `String` em `AssetCreateDTO` e `Long` no resto | 006 |
-    | - | `PUT/DELETE /users/{id}` nao verificam o dono; `@PreAuthorize` nao tem efeito | 002 |
-    | - | `DELETE /wallet/{id}` com ativos provavelmente falha por FK (400 generico) | 002 |
-    | - | `POST /wallet` com `assets` nulo responde 400 (NPE) | 002 |
     | - | Falha da Brapi em `getAssetData` vira 400 no summary, no total e em `POST /assets` | 008 |
     | - | `Asset.assetType` nunca e preenchido | 010 |
-    | - | Erros gerados por `sendError` (404 de rota inexistente, 405, 415, `@RequestParam` obrigatorio ausente, 403 de papel ADMIN) respondem 401 sem corpo no servidor real, porque `/error` / `DispatcherType.ERROR` nao esta liberado no SecurityConfig; em MockMvc aparecem com o status original. O 404 de recurso (`EntityNotFoundException`) nao e afetado | 002 |
     | C8 | Rotas que mudaram sem registro (proventos sem filtro = todas as carteiras; sync por id ou ticker; `/transactions` sem filtro = tudo do usuario; `POST /wallet/{id}/assets/merge`) | Resolvido: documentadas aqui |
   version: 0.1.0
 servers:
@@ -166,9 +162,12 @@ paths:
       tags:
       - Wallets
       summary: Excluir carteira
-      description: "PROBLEMA CONHECIDO (spec 002): excluir carteira com ativos provavelmente\
-        \ falha por FK e responde 400 generico. Carteira de outro usuario responde\
-        \ 403."
+      description: "Carteira sem ativos e excluida (com os snapshots). Carteira com\
+        \ ativos e sem force responde 409 com code WALLET_HAS_ASSETS e a quantidade\
+        \ de ativos na mensagem, sem apagar nada. Com force=true apaga, numa unica\
+        \ transacao, a carteira, os ativos, as transacoes, os proventos, as valuations\
+        \ e os snapshots; a cascata e irreversivel. Carteira de outro usuario responde\
+        \ 403 e inexistente 404, com ou sem force."
       operationId: deleteWallet
       parameters:
       - name: id
@@ -178,9 +177,24 @@ paths:
         schema:
           type: integer
           format: int64
+      - name: force
+        in: query
+        description: Confirma a exclusao em cascata de uma carteira com ativos. Padrao
+          false.
+        required: false
+        schema:
+          type: boolean
+          default: false
       responses:
         "204":
           description: Excluida. Sem corpo.
+        "409":
+          description: Carteira com ativos e sem force=true (code WALLET_HAS_ASSETS).
+            Nada foi apagado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessRuleErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -213,8 +227,8 @@ paths:
       tags:
       - Users
       summary: Buscar usuario por id (ADMIN)
-      description: "Exige papel ADMIN (GET /users/**); sem ADMIN responde 401 (corpo\
-        \ vazio), nao 403. Usuario inexistente responde 404."
+      description: "Exige papel ADMIN (GET /users/**); sem ADMIN responde 403 com\
+        \ {error}. Usuario inexistente responde 404."
       operationId: getById
       parameters:
       - name: id
@@ -237,6 +251,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Usuario autenticado sem papel ADMIN.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -254,10 +274,10 @@ paths:
     put:
       tags:
       - Users
-      summary: Atualizar usuario
-      description: "PROBLEMA CONHECIDO (spec 002): nao verifica o dono. Qualquer usuario\
-        \ autenticado pode alterar qualquer usuario; o @PreAuthorize da classe nao\
-        \ tem efeito nesta rota. Usuario inexistente responde 404."
+      summary: Atualizar usuario (ADMIN)
+      description: "Exige papel ADMIN (PUT /users/**); sem ADMIN responde 403 com\
+        \ {error} e nada muda. E-mail ja usado por outro usuario responde 409 com\
+        \ code EMAIL_ALREADY_EXISTS. Usuario inexistente responde 404."
       operationId: updateUser
       parameters:
       - name: id
@@ -286,6 +306,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Usuario autenticado sem papel ADMIN.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: E-mail ja usado por outro usuario (code EMAIL_ALREADY_EXISTS).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessRuleErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -303,10 +335,13 @@ paths:
     delete:
       tags:
       - Users
-      summary: Excluir usuario
-      description: "PROBLEMA CONHECIDO (spec 002): nao verifica o dono. Qualquer usuario\
-        \ autenticado pode excluir qualquer usuario. Usuario inexistente responde\
-        \ 404."
+      summary: Excluir usuario (ADMIN)
+      description: "Exige papel ADMIN (DELETE /users/**); sem ADMIN responde 403 com\
+        \ {error}. Apaga o usuario e, numa unica transacao, todas as carteiras dele\
+        \ com ativos, transacoes, proventos, valuations e snapshots (a mesma cascata\
+        \ de DELETE /wallet/{id}?force=true). O ADMIN que tenta excluir a propria\
+        \ conta recebe 409 com code CANNOT_DELETE_SELF e nada e apagado. Usuario inexistente\
+        \ responde 404."
       operationId: deleteUser
       parameters:
       - name: id
@@ -325,6 +360,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Usuario autenticado sem papel ADMIN.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: ADMIN tentando excluir a propria conta (code CANNOT_DELETE_SELF).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessRuleErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -671,10 +718,10 @@ paths:
       tags:
       - Wallets
       summary: Criar carteira
-      description: "A carteira pertence ao usuario do token. Cada item de assets abre\
-        \ uma posicao (ativo + compra BUY sintetica). PROBLEMA CONHECIDO (spec 002):\
-        \ assets nulo responde 400 (NPE). Falha da Brapi ao enriquecer um ativo tambem\
-        \ vira 400 (spec 008)."
+      description: A carteira pertence ao usuario do token. Cada item de assets abre
+        uma posicao (ativo + compra BUY sintetica). assets nulo ou ausente cria a
+        carteira vazia. name vazio ou ausente responde 400 no formato de validacao.
+        Falha da Brapi ao enriquecer um ativo tambem vira 400 (spec 008).
       operationId: createWallet
       requestBody:
         content:
@@ -824,12 +871,8 @@ paths:
       tags:
       - Users
       summary: Listar usuarios (ADMIN)
-      description: "Exige papel ADMIN (regra GET /users/** no SecurityConfig). Como\
-        \ esta hoje: usuario autenticado SEM ADMIN recebe 401 (corpo vazio), nao 403,\
-        \ no servidor real: o 403 do Spring Security e encaminhado por sendError ao\
-        \ dispatch de /error, que roda como anonimo e cai no entry point 401. Nos\
-        \ testes com MockMvc (sem dispatch de /error) a mesma chamada aparece como\
-        \ 403."
+      description: "Exige papel ADMIN (regra GET /users/** no SecurityConfig e @PreAuthorize).\
+        \ Usuario autenticado sem ADMIN recebe 403 com {error}; sem token, 401."
       operationId: getAll
       responses:
         "200":
@@ -840,6 +883,12 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/UserResponseDTO"
+        "403":
+          description: Usuario autenticado sem papel ADMIN.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -859,9 +908,8 @@ paths:
       - Users
       summary: Cadastrar usuario
       description: "Rota publica (POST /users). A senha e gravada com BCrypt e nunca\
-        \ devolvida. E-mail duplicado responde 400 com {error} contendo a mensagem\
-        \ crua do banco (DataIntegrityViolation), nao um texto de validacao. O papel\
-        \ (role) nao e escolhido pelo cliente."
+        \ devolvida. E-mail ja cadastrado responde 409 com {error, code: EMAIL_ALREADY_EXISTS},\
+        \ sem texto do banco. O papel (role) nao e escolhido pelo cliente."
       operationId: createUser
       requestBody:
         content:
@@ -876,6 +924,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponseDTO"
+        "409":
+          description: E-mail ja cadastrado (code EMAIL_ALREADY_EXISTS).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessRuleErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -1190,8 +1244,9 @@ paths:
       - Auth
       summary: Login
       description: "Autentica por e-mail e senha e devolve o JWT e o usuario. Rota\
-        \ publica. Credenciais invalidas caem no handler de RuntimeException e respondem\
-        \ 400 com {error} (nao 401)."
+        \ publica. Credenciais invalidas (e-mail inexistente ou senha errada) respondem\
+        \ 401 com {error: \"E-mail ou senha inválidos\"}, a mesma mensagem nos dois\
+        \ casos."
       operationId: login
       requestBody:
         content:
@@ -1206,6 +1261,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LoginResponseDTO"
+        "401":
+          description: Credenciais invalidas. A mensagem e fixa e igual para e-mail
+            inexistente e senha errada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "400":
           description: "Requisicao recusada. Tres formatos possiveis: validacao do\
             \ corpo {campo: mensagem} (ValidationErrorResponse), regra de negocio\
@@ -2055,15 +2117,15 @@ components:
       properties:
         name:
           type: string
-          description: Nome da carteira.
+          description: "Nome da carteira. Obrigatorio na criacao (POST); no PUT, nulo\
+            \ mantem o nome atual."
         description:
           type: string
           description: Descricao livre.
         assets:
           type: array
           description: "Posicoes de abertura: cada item vira um ativo mais uma compra\
-            \ BUY sintetica. PROBLEMA CONHECIDO (spec 002): nulo responde 400 (NPE)\
-            \ no POST; envie lista vazia."
+            \ BUY sintetica. Nulo ou ausente cria a carteira vazia."
           items:
             $ref: "#/components/schemas/AssetCreateDTO"
     AssetResponseDTO:
@@ -2151,9 +2213,11 @@ components:
           type: boolean
     BusinessRuleErrorResponse:
       type: object
-      description: "Recusa de regra de negocio (HTTP 400). O `code` e o contrato estavel;\
-        \ o `error` e texto de tela e pode mudar. Emitidos pelo replay do ledger (AssetPositionCalculator):\
-        \ registro, edicao e exclusao de transacoes e abertura de posicao."
+      description: "Recusa de regra de negocio (HTTP 400, ou 409 nos codigos de conflito).\
+        \ O `code` e o contrato estavel; o `error` e texto de tela e pode mudar. Emitidos\
+        \ pelo replay do ledger (AssetPositionCalculator): registro, edicao e exclusao\
+        \ de transacoes e abertura de posicao; e os conflitos de cadastro e exclusao\
+        \ (409)."
       properties:
         error:
           type: string
@@ -2163,18 +2227,23 @@ components:
           description: "Codigo estavel da regra violada. SELL_BEFORE_PURCHASE: venda\
             \ com data anterior a primeira compra do ativo. INSUFFICIENT_POSITION:\
             \ venda maior que a posicao existente na data informada. FUTURE_TRANSACTION_DATE:\
-            \ data da transacao no futuro."
+            \ data da transacao no futuro. Os tres acima respondem 400. Os abaixo\
+            \ respondem 409. EMAIL_ALREADY_EXISTS: e-mail ja cadastrado. WALLET_HAS_ASSETS:\
+            \ carteira com ativos excluida sem force=true. CANNOT_DELETE_SELF: ADMIN\
+            \ tentando excluir a propria conta."
           enum:
           - SELL_BEFORE_PURCHASE
           - INSUFFICIENT_POSITION
           - FUTURE_TRANSACTION_DATE
+          - EMAIL_ALREADY_EXISTS
+          - WALLET_HAS_ASSETS
+          - CANNOT_DELETE_SELF
     ErrorResponse:
       type: object
       description: "Erro generico: IllegalArgumentException, EntityNotFoundException\
         \ (404), AccessDeniedException de ownership (403), ResponseStatusException\
-        \ e qualquer RuntimeException nao tratada (400). O texto e livre, nao e contrato\
-        \ estavel e pode conter mensagem crua de excecao (ex.: violacao de unicidade\
-        \ do banco em e-mail duplicado)."
+        \ e qualquer RuntimeException nao tratada (400), alem do 401 de login invalido.\
+        \ O texto e livre e nao e contrato estavel."
       properties:
         error:
           type: string

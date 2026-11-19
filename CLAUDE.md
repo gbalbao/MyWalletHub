@@ -44,3 +44,8 @@ Cada serviço tem seu `CLAUDE.md` com comandos e regras. Os subagentes os respei
 - Com a feature concluída, ofereça rodar `/close-feature` (alimenta `docs/journal/`, base dos posts) e só rode com a confirmação do usuário.
 - Uma vez por semana, `/weekly-post` gera o rascunho de LinkedIn em `docs/story/posts/`. `/build-timeline` atualiza marcos e o estoque de ideias.
 - A narrativa vive em `docs/story/` (`origem.md`, `estilo.md`, `timeline.md`, `posts/`). Nunca publicar nada; só rascunhar.
+
+## Diagramas (Excalidraw)
+- Para arquitetura, fluxos e system design, use as ferramentas do Excalidraw (MCP). Chame `read_me` uma vez antes do primeiro `create_view`.
+- Depois de renderizar, salve os elementos em `docs/diagrams/<nome>.excalidraw` (formato `{"type":"excalidraw","version":2,"elements":[...],"appState":{}}`), para versionar, editar e exportar. Referencie o diagrama na spec ou no ADR correspondente.
+- Diagramas para posts públicos são do `storyteller` (`docs/story/diagrams/`). Se um diagrama técnico for reaproveitado em post, remova hosts, portas, endpoints sensíveis, credenciais e detalhes internos.

@@ -19,6 +19,15 @@
 - Falhas e bugs: só viram post depois de corrigidos e quando a correção melhora a credibilidade. Falha ainda aberta, sobretudo de segurança, não é publicada.
 - Evitar tom de venda e promessas; o autor decide se inclui chamada de oportunidade profissional.
 
+## Tom (ajuste de 2026-11-18, a partir dos posts de referência e de feedback do autor)
+- Escrever como quem conta uma história, em parágrafos de 2 a 4 frases. Evitar sequências de frases muito curtas e secas ("A meta era grande. Minhas ferramentas, não.").
+- Abrir com uma pergunta ao público ("Vocês também investem parte do seu dinheiro?").
+- Humor leve e honesto, sem exagero: "chatinho", "haha", admitir que algo demorou mais que o previsto.
+- Falar do começo real (primeiro salário, ainda sem se preocupar com valuation) antes do problema.
+- Citar ferramentas de terceiros só com respeito (reconhecer o que elas fazem bem) e sem atribuir falhas específicas sem fato verificado.
+- Fechar com pergunta que convide à conversa.
+- Frases que eu acrescento de interpretação ficam marcadas com (*) no rascunho para o autor confirmar.
+
 ## Regras fixas
 - Verdade acima de tudo: nada de métricas inventadas.
 - Nunca expor valores, dados de carteira, informações sensíveis do app, segredos ou detalhes de segurança.

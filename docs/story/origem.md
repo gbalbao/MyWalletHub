@@ -5,8 +5,8 @@
 - Usava ferramentas gratuitas da internet, todas com algum gap: consolidação ruim, demora na integração com a B3, UX ruim.
 - Construiu a própria ferramenta para ter controle e poder criar o que as outras não têm: valuation por fluxo de caixa descontado (DCF), rentabilidade real, taxa interna de retorno (TIR), entre outras.
 - Prefere o DCF e, em alguns casos, o modelo de Gordon.
-- É engenheiro de Controle e Automação.
-- Gordon, TIR e rentabilidade real: o autor confirma que o MyWallet os suporta; melhorias posteriores virão depois (confirmado em 2026-11-17).
+- No post de origem se apresenta como engenheiro de software (decisão de 2026-11-18; antes constava Controle e Automação).
+- Métodos de valuation citados no post: DCF, Gordon, Bazin e Graham. O autor escolhe o método que acha mais viável para cada ativo. Gordon confirmado como suportado em 2026-11-17; TIR e rentabilidade real saíram do post (podem voltar quando houver melhorias).
 - Não expor valores nem informações sensíveis do app.
 
 ## Texto-base (rascunho do post de origem, a ajustar pelo autor)
@@ -20,4 +20,4 @@ Nasceu o MyWallet. Vou compartilhar por aqui, aos poucos, o que estou construind
 
 ## Decidido (2026-11-17)
 - Idioma: inglês como principal, com a versão em pt-BR logo abaixo.
-- Área: Engenharia de Controle e Automação (pode entrar no post de origem).
+- Área: "engenheiro de software" no post de origem.
