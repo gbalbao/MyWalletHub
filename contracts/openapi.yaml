@@ -21,9 +21,6 @@ info:
     ## Problemas conhecidos
     | ID | Problema como esta hoje | Spec que corrige |
     |---|---|---|
-    | C1 | `AssetResponseDTO.currentValue` e o preco unitario gravado no cadastro e nunca atualizado; em `AssetSummaryDTO.currentValue` e o valor total da posicao | 004 |
-    | C2 | O front calcula P&L localmente; o P&L oficial vem de `PortfolioTotalsDTO.totalProfitLoss` e `pricedInvested` | 004 |
-    | C5 | `AssetResponseDTO.fairValue` e Graham automatico (`sqrt(22.5*PE*EPS)`), calculado so no cadastro e ao trocar o ticker | 004 |
     | C3 | `transactionDate` e `acquisitionDate` esperam `yyyy-MM-dd`; o ADC envia `...T00:00:00.000Z` e so funciona pela tolerancia do Jackson | 005 |
     | C6 | `computedAt`, `paymentDate` e `exDate` sao `java.util.Date`; o resto da API usa `LocalDate` | 005 |
     | C4 | Volatilidade em fracao (0 a 1); os demais percentuais em 0 a 100 | 006 |
@@ -540,7 +537,9 @@ paths:
       tags:
       - Assets
       summary: Buscar ativo por id
-      description: Ativo de outro usuario responde 403.
+      description: Inclui currentPrice (cotacao atual da Brapi; null = sem cotacao)
+        e fairValue/fairValueMethod/fairValueComputedAt (ultimo valuation; null =
+        sem valuation). Ativo de outro usuario responde 403.
       operationId: getById_2
       parameters:
       - name: id
@@ -589,8 +588,8 @@ paths:
       - Assets
       summary: Atualizar ticker do ativo
       description: "So o ticker e editavel (corpo com qualquer outro campo responde\
-        \ 400). Ao trocar o ticker, nome e fairValue (Graham, C5) sao recalculados\
-        \ pela Brapi. Posicao so muda por transacoes."
+        \ 400). Ao trocar o ticker, o nome e recalculado pela Brapi; o fairValue continua\
+        \ vindo do ultimo valuation do ativo. Posicao so muda por transacoes."
       operationId: updateAsset
       parameters:
       - name: id
@@ -1288,7 +1287,9 @@ paths:
       summary: Listar ativos
       description: "Sem walletId: ativos de todas as carteiras do usuario. Com walletId:\
         \ so daquela carteira (403 se for de outro usuario; walletId nao numerico\
-        \ responde 400). A lista nao expoe preco vivo; para isso use o summary."
+        \ responde 400). Cada item traz currentPrice (cotacao atual da Brapi, buscada\
+        \ uma vez por ticker na requisicao; null = sem cotacao) e fairValue/fairValueMethod/fairValueComputedAt\
+        \ (ultimo valuation do ativo; null = sem valuation)."
       operationId: getAll_1
       parameters:
       - name: walletId
@@ -1337,17 +1338,17 @@ paths:
       tags:
       - Assets
       summary: Criar ativo (abertura de posicao)
-      description: "Cria o ativo na carteira e enriquece nome/PE/EPS pela Brapi. Se\
-        \ o ticker JA EXISTE na carteira (comparacao sem diferenciar maiusculas),\
-        \ nenhum ativo novo e criado: quando unitPrice vem, soma uma compra BUY ao\
-        \ ativo existente (data = acquisitionDate ou hoje) e devolve o ATIVO EXISTENTE,\
-        \ com os agregados recalculados; sem unitPrice, devolve o ativo existente\
-        \ sem alteracao. Em ambos os casos o status e 201 com Location, igual a uma\
-        \ criacao. unitPrice e acquisitionDate descrevem a compra de abertura (BUY\
-        \ sintetica); sao opcionais (sem unitPrice o ativo nasce zerado). PROBLEMAS\
-        \ CONHECIDOS: falha da Brapi em getAssetData vira 400 (spec 008); walletId\
-        \ e String aqui (C10, spec 006); acquisitionDate espera yyyy-MM-dd (C3, spec\
-        \ 005). Carteira de outro usuario responde 403."
+      description: "Cria o ativo na carteira e enriquece o nome pela Brapi. Se o ticker\
+        \ JA EXISTE na carteira (comparacao sem diferenciar maiusculas), nenhum ativo\
+        \ novo e criado: quando unitPrice vem, soma uma compra BUY ao ativo existente\
+        \ (data = acquisitionDate ou hoje) e devolve o ATIVO EXISTENTE, com os agregados\
+        \ recalculados; sem unitPrice, devolve o ativo existente sem alteracao. Em\
+        \ ambos os casos o status e 201 com Location, igual a uma criacao. unitPrice\
+        \ e acquisitionDate descrevem a compra de abertura (BUY sintetica); sao opcionais\
+        \ (sem unitPrice o ativo nasce zerado). PROBLEMAS CONHECIDOS: falha da Brapi\
+        \ em getAssetData vira 400 (spec 008); walletId e String aqui (C10, spec 006);\
+        \ acquisitionDate espera yyyy-MM-dd (C3, spec 005). Carteira de outro usuario\
+        \ responde 403."
       operationId: createAsset
       requestBody:
         content:
@@ -1585,8 +1586,10 @@ paths:
       description: "Totais e quebra por ativo com preco vivo. Ativos zerados (amount\
         \ 0) ficam fora. Falha de cotacao de um ticker devolve o ativo com currentPrice\
         \ nulo e warning=true (nao derruba a requisicao); PROBLEMA CONHECIDO (spec\
-        \ 008): falha em getAssetData vira 400. Carteira de outro usuario responde\
-        \ 403."
+        \ 008): falha em getAssetData vira 400. totalProfitLoss e totalProfitLossPercentage\
+        \ consideram so as posicoes com preco (pricedInvested); o percentual vem null\
+        \ quando pricedInvested e zero. totalInvested continua sendo o custo de todas\
+        \ as posicoes. Carteira de outro usuario responde 403."
       operationId: getWalletSummary
       parameters:
       - name: walletId
@@ -1820,9 +1823,9 @@ paths:
       - Wallets
       summary: Resumo vivo de todas as carteiras
       description: "Soma de todas as carteiras do usuario com precos vivos da Brapi.\
-        \ P&L oficial (C2): totalProfitLoss, calculado so sobre pricedInvested. Preco\
-        \ ausente = posicao listada em missingPrices e complete=false, nunca zero.\
-        \ PROBLEMA CONHECIDO (spec 008): falha da Brapi em getAssetData vira 400."
+        \ P&L geral: totalProfitLoss, calculado so sobre pricedInvested. Preco ausente\
+        \ = posicao listada em missingPrices e complete=false, nunca zero. PROBLEMA\
+        \ CONHECIDO (spec 008): falha da Brapi em getAssetData vira 400."
       operationId: getConsolidatedSummary
       responses:
         "200":
@@ -2130,8 +2133,8 @@ components:
             $ref: "#/components/schemas/AssetCreateDTO"
     AssetResponseDTO:
       type: object
-      description: Ativo (posicao) cadastrado. Nao traz cotacao viva; use o summary
-        da carteira.
+      description: "Ativo (posicao) cadastrado, com a cotacao atual e o ultimo valuation\
+        \ do usuario. A cotacao e buscada na Brapi a cada leitura."
       properties:
         id:
           type: integer
@@ -2147,13 +2150,14 @@ components:
           type: integer
           format: int32
           description: "Quantidade em carteira, derivada do ledger."
-        currentValue:
+        currentPrice:
           type: number
           format: double
-          description: "PROBLEMA CONHECIDO C1 (spec 004): preco UNITARIO gravado no\
-            \ cadastro e nunca atualizado; nao e cotacao atual. Em AssetSummaryDTO,\
-            \ currentValue e o valor TOTAL da posicao. Valor em BRL (implicito), double\
-            \ sem arredondamento. "
+          description: "Valor em BRL (implicito), double sem arredondamento. Cotacao\
+            \ UNITARIA atual da Brapi, buscada na leitura (em AssetSummaryDTO, currentValue\
+            \ e o valor TOTAL da posicao). null = sem cotacao (Brapi falhou ou nao\
+            \ tem preco), nunca zero; a resposta continua 200. Moeda e momento da\
+            \ cotacao nao sao expostos (C7, spec 006)."
         mediumPrice:
           type: number
           format: double
@@ -2162,10 +2166,22 @@ components:
         fairValue:
           type: number
           format: double
-          description: "PROBLEMA CONHECIDO C5 (spec 004): Graham automatico, sqrt(22.5*PE*EPS),\
-            \ calculado so no cadastro e na troca de ticker; nao reflete valuations\
-            \ posteriores. Valor em BRL (implicito), double sem arredondamento. null\
-            \ = sem PE/EPS."
+          description: "Valor em BRL (implicito), double sem arredondamento. Valor\
+            \ justo por acao: o result do valuation mais recente do ativo, de qualquer\
+            \ metodo. null = ativo sem valuation."
+        fairValueMethod:
+          type: string
+          description: "Metodo do valuation que originou fairValue (GRAHAM, BAZIN\
+            \ ou DCF). null = ativo sem valuation."
+          enum:
+          - GRAHAM
+          - BAZIN
+          - DCF
+        fairValueComputedAt:
+          type: string
+          format: date-time
+          description: "Momento do calculo do valuation que originou fairValue. java.util.Date\
+            \ serializado como date-time (C6, spec 005). null = ativo sem valuation."
         totalInvested:
           type: number
           format: double
@@ -2192,8 +2208,7 @@ components:
             \ de totalInvested dos ativos, derivada na leitura."
         assets:
           type: array
-          description: "Ativos da carteira (AssetResponseDTO.currentValue tem semantica\
-            \ propria, ver C1)."
+          description: "Ativos da carteira (com currentPrice e fairValue, ver AssetResponseDTO)."
           items:
             $ref: "#/components/schemas/AssetResponseDTO"
     ValidationErrorResponse:
@@ -2375,8 +2390,7 @@ components:
       properties:
         ticker:
           type: string
-          description: "Novo ticker. Nome e fairValue (Graham, C5) sao recalculados\
-            \ pela Brapi."
+          description: Novo ticker. O nome e recalculado pela Brapi.
           minLength: 1
       required:
       - ticker
@@ -2732,10 +2746,9 @@ components:
         currentValue:
           type: number
           format: double
-          description: "PROBLEMA CONHECIDO C1 (spec 004): aqui e o valor TOTAL da\
-            \ posicao (amount * currentPrice); em AssetResponseDTO e o preco unitario\
-            \ do cadastro. Valor em BRL (implicito), double sem arredondamento. null\
-            \ = sem preco."
+          description: "Valor TOTAL da posicao (amount * currentPrice); em AssetResponseDTO,\
+            \ currentPrice e a cotacao unitaria. Valor em BRL (implicito), double\
+            \ sem arredondamento. null = sem preco."
         profitLoss:
           type: number
           format: double
@@ -2773,25 +2786,31 @@ components:
           type: number
           format: double
           description: "Valor em BRL (implicito), double sem arredondamento. Custo\
-            \ total das posicoes."
+            \ de TODAS as posicoes abertas, inclusive as sem preco."
+        pricedInvested:
+          type: number
+          format: double
+          description: "Valor em BRL (implicito), double sem arredondamento. Custo\
+            \ so das posicoes COM preco (as que entram em totalCurrentValue). Base\
+            \ do P&L e do percentual."
         totalCurrentValue:
           type: number
           format: double
           description: "Valor em BRL (implicito), double sem arredondamento. Valor\
             \ de mercado so das posicoes COM preco; posicao sem preco (warning=true)\
-            \ nao entra aqui, mas o custo dela entra em totalInvested."
+            \ nao entra aqui nem em pricedInvested, mas o custo dela entra em totalInvested."
         totalProfitLoss:
           type: number
           format: double
           description: "Valor em BRL (implicito), double sem arredondamento. totalCurrentValue\
-            \ - totalInvested. PROBLEMA CONHECIDO (C2, spec 004): inclui no custo\
-            \ as posicoes sem preco, o que mostra prejuizo falso quando uma cotacao\
-            \ falha; o P&L oficial e PortfolioTotalsDTO.totalProfitLoss."
+            \ - pricedInvested: so posicoes com preco, entao uma cotacao que falhou\
+            \ nao vira prejuizo."
         totalProfitLossPercentage:
           type: number
           format: double
           description: "Percentual de 0 a 100 (ex.: 12.5 = 12,5%). totalProfitLoss\
-            \ sobre totalInvested; 0 quando totalInvested e zero."
+            \ sobre pricedInvested. null = pricedInvested e zero (nenhuma posicao\
+            \ com preco), nunca 0."
         assets:
           type: array
           description: Quebra por ativo.
@@ -2866,8 +2885,8 @@ components:
           description: Ticker sem preco.
     PortfolioTotalsDTO:
       type: object
-      description: "Resumo vivo de todas as carteiras do usuario. Fonte oficial do\
-        \ P&L (C2, spec 004): totalProfitLoss, calculado so sobre pricedInvested."
+      description: "Resumo vivo de todas as carteiras do usuario. Fonte do P&L geral:\
+        \ totalProfitLoss, calculado so sobre pricedInvested."
       properties:
         generatedAt:
           type: string
