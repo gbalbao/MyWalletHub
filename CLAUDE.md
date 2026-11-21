@@ -32,6 +32,8 @@ Cada serviço tem seu `CLAUDE.md` com comandos e regras. Os subagentes os respei
 6. `integration-reviewer` valida se os serviços conversam entre si (`/check-contract`).
 7. Resumo ao usuário, com o que mudou e o que falta.
 
+Backlog: mantenha 3 specs prontas, ou seja, com a spec escrita e todos os cards em `pendente`. O `/close-feature` checa o impacto da feature fechada nessas specs e oferece o `/refill-backlog` quando houver menos de 3. Toda spec começa pelo `/start-spec NNN`, que a revalida contra o que mudou desde que foi escrita antes de delegar.
+
 ## Regras
 - Pergunte antes de decidir algo de design que seja caro de desfazer.
 - Nunca faça commit nem push sem o usuário pedir.

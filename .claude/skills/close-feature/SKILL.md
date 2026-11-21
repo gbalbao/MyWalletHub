@@ -15,3 +15,8 @@ Argumento: número ou nome da spec. Sem argumento, use a mais recente em `specs/
    - `Material`: sugestões de print ou gráfico que ilustrariam (sem dados pessoais).
 3. Nunca inclua segredos, tokens, nomes de clientes, dados reais de carteira ou detalhes de segurança.
 4. Se o conector ClickUp estiver ativo, ofereça mover os cards da spec para concluído e só faça se o usuário confirmar.
+5. Checagem de impacto nas specs prontas. Specs prontas são as de `specs/` com todos os cards em `pendente`. Para cada uma:
+   - Compare com o que a feature fechada mudou: contrato, DTOs, campos, rotas, migrations e arquivos citados nas tarefas.
+   - Se houver impacto, acrescente em "Riscos e dúvidas" da spec afetada uma linha `- **Impacto da NNN (AAAA-MM-DD):** <o que mudou e o que a spec precisa considerar>.` Não reescreva o resto da spec; a revisão completa é do `/start-spec`.
+   - Diga ao usuário quais specs foram afetadas e se isso sugere mudar a ordem do backlog. Sem impacto, diga isso em uma linha.
+6. Conte as specs prontas. Se houver menos de 3, ofereça rodar `/refill-backlog` e só rode com a confirmação do usuário.
